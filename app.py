@@ -4792,11 +4792,11 @@ def create_leave_request():
             'multi-day': 'متعددة الأيام'
         }
 
-            # تعريف قاموس تحويل تصنيفات الإجازات إلى العربية
+        # تعريف قاموس تحويل تصنيفات الإجازات إلى العربية
         classification_arabic = {
-                'regular': 'عادية',
-                'sick': 'مرضية',
-                'emergency': 'خاصة'
+            'regular': 'عادية',
+            'sick': 'مرضية',
+            'emergency': 'خاصة'
         }
         employee_id = session['employee']['id']
         print(f"Employee ID: {employee_id}")
@@ -4990,7 +4990,7 @@ def create_leave_request():
             date_info = f"📅 تاريخ {data['start_date']}"
         elif data['type'] == 'hourly':
             date_info = f"📅 تاريخ {data['start_date']} ⏰ من {data['start_time']} إلى {data['end_time']}"
-        archive_message = None  # تعريف مسبق
+
         # إرسال الإشعارات
         if not is_supervisor:
             print("إرسال إشعارات للمشرفين...")
@@ -5042,17 +5042,19 @@ def create_leave_request():
 {medical_message if medical_message else ''}
                 """
                 send_telegram_message(employee.telegram_chatid, telegram_message)
-        if employee.role == "مشرف":
+
+        # إرسال رسالة الأرشيف إلى المجموعة فقط إذا كان المشرف
+        if is_supervisor:
             archive_message = f"""
 📋 طلب معتمد - أرشيف
 ━━━━━━━━━━━━━━━━━━━━
 📄 نوع الطلب: إجازة
 👤 الموظف: {employee.full_name_arabic}
 🏢 القسم: {employee.department.dep_name if employee.department else "غير محدد"}
-👨‍💼 المشرف: {Supervisor.query.get(new_request.supervisor_id).employee.full_name_arabic if new_request.supervisor_id else "غير محدد"}
+👨‍💼 المشرف: {employee.full_name_arabic} (بنفسه)
 
 📋 نوع الإجازة: {data['type']}
-🏷️ التصنيف: {classification}
+🏷️ التصنيف: {classification_arabic.get(classification, classification)}
 📅 التاريخ: {start_date}{f' إلى {end_date}' if data['type'] == 'multi-day' else ""}
 {f"⏰ الوقت: من {new_request.start_time.strftime('%I:%M %p')} إلى {new_request.end_time.strftime('%I:%M %p')}" if data['type'] == 'hourly' else ""}
 ⏱️ المدة: {hours_requested:.2f} ساعة
@@ -5061,9 +5063,11 @@ def create_leave_request():
 🕒 وقت المعالجة: {datetime.now(pytz.timezone("Asia/Damascus")).strftime('%Y-%m-%d %I:%M %p')}
 ━━━━━━━━━━━━━━━━━━━━
 𝑨𝒍𝒎𝒐𝒉𝒕𝒂𝒓𝒊𝒇 🅗🅡
-    """
-        group_chat_id = "-4847322310"
-        send_telegram_message(group_chat_id, archive_message)
+            """
+            group_chat_id = "-4847322310"
+            send_telegram_message(group_chat_id, archive_message)
+            print("تم إرسال رسالة الأرشيف للمجموعة (مشرف)")
+
         db.session.commit()
         print("تم حفظ التغييرات في قاعدة البيانات")
 
@@ -5107,8 +5111,9 @@ def create_leave_request():
 ⏱️ <b>المدة:</b> {new_request.hours_requested:.2f} ساعة
                 """
 
-            # نص الإعلان (يتم تنفيذه لجميع أنواع الإجازات)
-            announcement_message = f"""
+            # إرسال الإعلان للموظفين فقط إذا كان المشرف
+            if is_supervisor:
+                announcement_message = f"""
 📢 <b>إشعار إجازة موظف</b>
 ━━━━━━━━━━━━━━━━━━━━
 👤 <b>الموظف:</b> {employee.full_name_arabic}
@@ -5116,30 +5121,23 @@ def create_leave_request():
 🕒 <b>وقت الإعلان:</b> {datetime.now(pytz.timezone("Asia/Damascus")).strftime("%Y-%m-%d %I:%M %p")}
 ━━━━━━━━━━━━━━━━━━━━
 𝑨𝒍𝒎𝒐𝒉𝒕𝒂𝒓𝒊𝒇 🅗🅡
-            """
+                """
 
-            # جلب موظفين القسم مع استثناء مقدم الطلب
-            department_employees = Employee.query.filter_by(
-                department_id=employee.department_id
-            ).filter(
-                Employee.telegram_chatid.isnot(None),  # تصحيح: استخدام None بدلاً من Null
-                Employee.id != employee.id
-            ).all()
+                # جلب موظفين القسم مع استثناء مقدم الطلب
+                department_employees = Employee.query.filter_by(
+                    department_id=employee.department_id
+                ).filter(
+                    Employee.telegram_chatid.isnot(None),
+                    Employee.id != employee.id
+                ).all()
 
-            # إضافة المشرف للقائمة (لو عنده chatid)
-            supervisor = Supervisor.query.get(new_request.supervisor_id)
-            if supervisor:
-                supervisor_employee = db.session.get(Employee, supervisor.supervisor_ID)
-                if supervisor_employee and supervisor_employee.telegram_chatid and supervisor_employee.id != employee.id:
-                    department_employees.append(supervisor_employee)
-
-            # إرسال الإشعار لكل موظف
-            for dept_employee in department_employees:
-                try:
-                    send_telegram_message(dept_employee.telegram_chatid, announcement_message)
-                    print(f"تم إرسال إشعار إلى {dept_employee.full_name_arabic}")
-                except Exception as e:
-                    print(f"فشل إرسال الإشعار إلى {dept_employee.full_name_arabic}: {str(e)}")
+                # إرسال الإشعار لكل موظف
+                for dept_employee in department_employees:
+                    try:
+                        send_telegram_message(dept_employee.telegram_chatid, announcement_message)
+                        print(f"تم إرسال إشعار إلى {dept_employee.full_name_arabic}")
+                    except Exception as e:
+                        print(f"فشل إرسال الإشعار إلى {dept_employee.full_name_arabic}: {str(e)}")
 
         except Exception as e:
             print(f"❌ فشل إعلام الموظفين: {str(e)}")
@@ -7589,3 +7587,4 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
