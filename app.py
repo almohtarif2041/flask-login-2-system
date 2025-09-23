@@ -5042,6 +5042,7 @@ def create_leave_request():
 {medical_message if medical_message else ''}
                 """
                 send_telegram_message(employee.telegram_chatid, telegram_message)
+        if employee.role == "مشرف":
             archive_message = f"""
 📋 طلب معتمد - أرشيف
 ━━━━━━━━━━━━━━━━━━━━
@@ -7586,4 +7587,5 @@ def logout():
 
 
 if __name__ == '__main__':
+
     app.run(debug=True)
