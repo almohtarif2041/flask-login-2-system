@@ -6483,14 +6483,15 @@ def get_supervisor_2_leave_requests():
         LeaveRequest.start_time,
         LeaveRequest.end_time,
         LeaveRequest.note,
-        LeaveRequest.regular_leave_hours,
-        LeaveRequest.sick_leave_hours,
-        LeaveRequest.emergency_leave_hours
+        Employee.regular_leave_hours,
+        Employee.sick_leave_hours,
+        Employee.emergency_leave_hours
     ).join(Employee, Employee.id == LeaveRequest.employee_id)\
      .filter(
         LeaveRequest.supervisor_id == supervisor_id,
         LeaveRequest.employee_id != supervisor_id
      ).all()
+
    
     result = []
     for r in leave_requests:
@@ -7589,6 +7590,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
