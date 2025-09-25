@@ -548,7 +548,7 @@ def create_compensation_leave_request():
             try:
                 archive_message = f"""
 📋 <b>طلب معتمد - أرشيف</b>
-━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━
 📄 <b>نوع الطلب:</b> تعويض
 👤 <b>الموظف:</b> {employee.full_name_arabic}
 🏢 <b>القسم:</b> {employee.department.dep_name}
@@ -559,7 +559,7 @@ def create_compensation_leave_request():
 ⏱️ <b>المدة:</b> {hours_requested:.2f} ساعة
 📝 <b>السبب:</b> {data['note']}
 🕒 <b>وقت المعالجة:</b> {datetime.now(syria_tz).strftime("%Y-%m-%d %I:%M %p")}
-━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━
 𝑨𝒍𝒎𝒐𝒉𝒕𝒂𝒓𝒊𝒇 🅗🅡
                 """
                 group_chat_id = "-4847322310"
@@ -7589,5 +7589,6 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
