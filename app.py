@@ -470,7 +470,9 @@ def create_compensation_leave_request():
             "success": False,
             "message": "تنسيق التاريخ أو الوقت غير صحيح"
         }), 400
-
+    date_str = request_date.strftime('%Y-%m-%d')
+    start_time_str = start_time.strftime('%I:%M %p').replace('AM','ص').replace('PM','م')
+    end_time_str = end_time.strftime('%I:%M %p').replace('AM','ص').replace('PM','م')
     # حساب ساعات الطلب
     start_dt = datetime.combine(datetime.today(), start_time)
     end_dt = datetime.combine(datetime.today(), end_time)
@@ -7587,4 +7589,5 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
