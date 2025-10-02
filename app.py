@@ -419,6 +419,178 @@ def telegram_webhook():
             })
 
     return "OK"
+# ==========================================
+# 1. احذف كل كود الـ APScheduler
+# ==========================================
+
+# ==========================================
+# 2. أضف نظام الـ Cron فقط
+# ==========================================
+
+import os
+import secrets
+from datetime import datetime, timedelta
+import pytz
+
+# مفتاح سري للـ cron endpoint
+CRON_SECRET_KEY = os.environ.get('CRON_SECRET_KEY', 'temporary-key-change-later')
+
+@app.route('/cron/auto-checkout', methods=['GET', 'POST'])
+def cron_auto_checkout():
+    """
+    نقطة الوصول للخروج التلقائي - يتم استدعاؤها من cron-job.org كل دقيقة
+    """
+    # التحقق من المفتاح السري
+    provided_key = request.args.get('key') or request.headers.get('X-Cron-Key')
+    
+    if provided_key != CRON_SECRET_KEY:
+        return jsonify({'error': 'Unauthorized', 'message': 'مفتاح غير صحيح'}), 401
+    
+    try:
+        damascus_tz = pytz.timezone('Asia/Damascus')
+        current_time = datetime.now(damascus_tz)
+        today = current_time.date()
+        
+        processed_count = 0
+        error_count = 0
+        employees_processed = []
+        
+        # ✅ تحسين: تسجيل وقت البدء للرصد
+        start_time = datetime.now()
+        
+        # البحث عن جميع الموظفين النشطين
+        active_employees = Employee.query.filter_by(status='on').all()
+        
+        print(f"🔍 فحص {len(active_employees)} موظف نشط للخروج التلقائي...")
+        
+        for employee in active_employees:
+            try:
+                # التحقق من وجود سجل حضور نشط
+                record = AttendanceRecord.query.filter_by(
+                    employee_id=employee.id,
+                    work_date=today,
+                    check_out_time=None
+                ).first()
+                
+                if not record:
+                    continue
+                
+                # حساب وقت انتهاء العمل + 30 دقيقة
+                work_end_dt = datetime.combine(today, employee.work_end_time)
+                work_end_dt = damascus_tz.localize(work_end_dt)
+                auto_checkout_time = work_end_dt + timedelta(minutes=30)
+                
+                # ✅ تحسين: إضافة تفاصيل أكثر للتسجيل
+                time_remaining = auto_checkout_time - current_time
+                minutes_remaining = int(time_remaining.total_seconds() / 60) if time_remaining.total_seconds() > 0 else 0
+                
+                # التحقق من أن الوقت الحالي قد تجاوز وقت الخروج التلقائي
+                if current_time >= auto_checkout_time:
+                    perform_auto_checkout_now(employee, record, current_time, damascus_tz)
+                    processed_count += 1
+                    employees_processed.append({
+                        'id': employee.id,
+                        'name': employee.name,
+                        'checkout_time': current_time.strftime('%H:%M'),
+                        'scheduled_time': auto_checkout_time.strftime('%H:%M')
+                    })
+                else:
+                    # ✅ تحسين: تسجيل الموظفين الذين على وشك الخروج
+                    if minutes_remaining <= 5:  # خلال 5 دقائق
+                        print(f"⏰ الموظف {employee.name} سينتهي تلقائياً خلال {minutes_remaining} دقيقة")
+                    
+            except Exception as e:
+                error_count += 1
+                print(f"❌ خطأ في معالجة الموظف {employee.id}: {str(e)}")
+                continue
+        
+        # ✅ تحسين: حساب وقت التنفيذ
+        execution_time = (datetime.now() - start_time).total_seconds()
+        
+        return jsonify({
+            'success': True,
+            'processed': processed_count,
+            'errors': error_count,
+            'employees': employees_processed,
+            'timestamp': current_time.isoformat(),
+            'execution_time_seconds': round(execution_time, 2),
+            'total_active_employees': len(active_employees),
+            'message': f'✓ تمت معالجة {processed_count} موظف بنجاح'
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ خطأ عام في cron: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+def perform_auto_checkout_now(employee, record, current_time, damascus_tz):
+    """
+    تنفيذ الخروج التلقائي لموظف معين
+    """
+    try:
+        today = current_time.date()
+        
+        # تحديث سجل الحضور
+        record.check_out_time = current_time
+        if hasattr(record, 'is_auto_checkout'):
+            record.is_auto_checkout = True
+        employee.status = 'off'
+        
+        # حساب ساعات العمل
+        if record.check_in_time:
+            check_in = record.check_in_time.astimezone(damascus_tz)
+            check_out = current_time
+            
+            # ساعات العمل الفعلية في المكتب
+            work_seconds = (check_out - check_in).total_seconds()
+            office_work_hours = round(work_seconds / 3600, 2)
+            record.office_work_hours = office_work_hours
+        
+            # ساعات العمل ضمن الدوام الرسمي
+            work_start_dt = datetime.combine(today, employee.work_start_time)
+            work_end_dt = datetime.combine(today, employee.work_end_time)
+            
+            work_start_dt = damascus_tz.localize(work_start_dt)
+            work_end_dt = damascus_tz.localize(work_end_dt)
+            
+            start_work = max(check_in, work_start_dt)
+            end_work = min(check_out, work_end_dt)
+            
+            if start_work < end_work:
+                work_seconds_within = (end_work - start_work).total_seconds()
+                work_hours_within = round(work_seconds_within / 3600, 2)
+            else:
+                work_hours_within = 0
+            
+            record.work_hours = work_hours_within
+        
+        db.session.commit()
+        print(f"✓ تم الخروج التلقائي للموظف {employee.name} (ID: {employee.id})")
+        
+        # إرسال إشعار تيليجرام
+        if employee.telegram_chatid:
+            telegram_message = f"""🔔 <b>خروج تلقائي</b>
+
+تم تسجيل خروجك تلقائياً الساعة {current_time.strftime('%H:%M')} (بتوقيت دمشق) بعد نصف ساعة من انتهاء دوامك الرسمي، نظراً لعدم تسجيل الخروج في الوقت المحدد.
+
+إذا رغبت في تعويض وقت الدوام أو تسجيل دوام إضافي، يرجى:
+1. الانتقال إلى التطبيق الآن
+2. استخدام الأزرار المخصصة:
+   • زر <b>طلب تعويض</b> لطلب من المشرف تعويض ساعات الاجازة
+   • زر <b>طلب إضافي</b> لطلب من المشرف ساعات إضافية
+
+━━━━━━━━━━━━━━━━━━
+{current_time.strftime('%Y-%m-%d %I:%M %p')}
+𝑨𝒍𝒎𝒐𝒉𝒕𝒂𝒓𝒊𝒇 🅗🅡"""
+            send_telegram_message(employee.telegram_chatid, telegram_message)
+            
+    except Exception as e:
+        if db.session.is_active:
+            db.session.rollback()
+        print(f"❌ خطأ في الخروج التلقائي: {str(e)}")
+        raise
 @app.route('/api/compensation-leave-requests', methods=['POST'])
 def create_compensation_leave_request():
     if 'employee' not in session:
@@ -4118,7 +4290,7 @@ def index():
 from datetime import datetime, time, timedelta
 import pytz  # إضافة مكتبة pytz للمناطق الزمنية
 # في بداية الملف، أضف الاستيرادات المطلوبة
-from apscheduler.schedulers.background import BackgroundScheduler
+'''from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
 from threading import Lock
 
@@ -4283,7 +4455,7 @@ def cancel_auto_checkout(employee_id):
                     pass
                 del scheduled_checkouts[employee_id]
     except Exception as e:
-        print(f"خطأ في إلغاء الخروج التلقائي: {str(e)}")
+        print(f"خطأ في إلغاء الخروج التلقائي: {str(e)}")'''
 
 # جلب الأزرار الخاصة بقسم الموظف الحالي
 @app.route('/api/special-buttons/employee', methods=['GET'])
@@ -4317,10 +4489,11 @@ def get_employee_special_buttons():
             'success': False, 
             'message': f'خطأ في جلب الأزرار الخاصة: {str(e)}'
         }), 500
-# تحديث route تسجيل الدخول/الخروج
+# تحديث route تسجيل الدخول/الخروج - مع تعليق استدعاءات نظام APScheduler
 @app.route('/api/attendance', methods=['POST'])
 def handle_attendance():
     try:
+        # التحقق من تسجيل الدخول
         if 'employee' not in session:
             return jsonify({
                 'success': False,
@@ -4330,6 +4503,7 @@ def handle_attendance():
         employee_id = session['employee']['id']
         employee = db.session.get(Employee, employee_id)
         
+        # إعداد الوقت بتوقيت دمشق
         damascus_tz = pytz.timezone('Asia/Damascus')
         current_time = datetime.now(damascus_tz)
         today = current_time.date()
@@ -4340,7 +4514,7 @@ def handle_attendance():
                 'message': 'الموظف غير موجود'
             }), 404
 
-        # 1. الحصول على المشرف المسؤول عن قسم الموظف
+        # البحث عن المشرف المسؤول
         department = employee.department
         supervisor = None
         
@@ -4348,7 +4522,7 @@ def handle_attendance():
             # بما أن كل قسم له مشرف واحد فقط، نأخذ أول مشرف
             supervisor = department.supervisors[0]
         
-        # 2. إذا لم يوجد مشرف، نبحث عن مشرف بديل
+        # إذا لم يوجد مشرف، نبحث عن مشرف بديل
         if not supervisor:
             # نبحث عن أي مشرف في النظام
             fallback_supervisor = Supervisor.query.first()
@@ -4383,8 +4557,8 @@ def handle_attendance():
             db.session.add(new_record)
             db.session.commit()
 
-            # جدولة الخروج التلقائي
-            schedule_auto_checkout(employee.id, employee.work_end_time)
+            # ❌ تم تعليق جدولة الخروج التلقائي - النظام يعتمد على الـ Cron الخارجي الآن
+            # schedule_auto_checkout(employee.id, employee.work_end_time)
 
             start_time = employee.work_start_time
             actual_start = damascus_tz.localize(datetime.combine(today, start_time))
@@ -4432,8 +4606,8 @@ def handle_attendance():
             employee.status = 'off'
             db.session.commit()
 
-            # إلغاء الخروج التلقائي المجدول
-            cancel_auto_checkout(employee.id)
+            # ❌ تم تعليق إلغاء الخروج التلقائي المجدول - النظام يعتمد على الـ Cron الخارجي الآن
+            # cancel_auto_checkout(employee.id)
 
             existing_record.check_out_time = current_time
             
@@ -4481,7 +4655,7 @@ def handle_attendance():
         }), 500
 
 # إبقاء route منفصل للخروج التلقائي للمرونة
-@app.route('/api/attendance/auto-checkout', methods=['POST'])
+'''@app.route('/api/attendance/auto-checkout', methods=['POST'])
 def auto_checkout():
     # التحقق من وجود جلسة الموظف
     if 'employee' not in session:
@@ -4611,7 +4785,7 @@ def get_auto_checkout_status(employee_id):
 
 # تنظيف الـ scheduler عند إغلاق التطبيق
 import atexit
-atexit.register(lambda: scheduler.shutdown())
+atexit.register(lambda: scheduler.shutdown())'''
 # أضف هذا Route في الباك إند إذا لم تضعه
 @app.route('/api/user/status', methods=['GET'])
 def get_user_status():
@@ -7590,6 +7764,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
