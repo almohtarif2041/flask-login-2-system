@@ -490,14 +490,14 @@ def cron_auto_checkout():
                     processed_count += 1
                     employees_processed.append({
                         'id': employee.id,
-                        'name': employee.name,
+                        'name': employee.full_name_arabic,
                         'checkout_time': current_time.strftime('%H:%M'),
                         'scheduled_time': auto_checkout_time.strftime('%H:%M')
                     })
                 else:
                     # ✅ تحسين: تسجيل الموظفين الذين على وشك الخروج
                     if minutes_remaining <= 5:  # خلال 5 دقائق
-                        print(f"⏰ الموظف {employee.name} سينتهي تلقائياً خلال {minutes_remaining} دقيقة")
+                        print(f"⏰ الموظف {employee.full_name_arabic} سينتهي تلقائياً خلال {minutes_remaining} دقيقة")
                     
             except Exception as e:
                 error_count += 1
@@ -567,7 +567,7 @@ def perform_auto_checkout_now(employee, record, current_time, damascus_tz):
             record.work_hours = work_hours_within
         
         db.session.commit()
-        print(f"✓ تم الخروج التلقائي للموظف {employee.name} (ID: {employee.id})")
+        print(f"✓ تم الخروج التلقائي للموظف {employee.full_name_arabic} (ID: {employee.id})")
         
         # إرسال إشعار تيليجرام
         if employee.telegram_chatid:
@@ -7764,6 +7764,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
