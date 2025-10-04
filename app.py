@@ -699,13 +699,41 @@ def perform_auto_checkout_now(employee, record, current_time, damascus_tz):
         
         # حساب ساعات العمل
         if record.check_in_time:
-            check_in = record.check_in_time.astimezone(damascus_tz)
-            check_out = current_time
+            # ✅ إصلاح: تأكد من أن كلا الوقتين بنفس المنطقة الزمنية
+            check_in = record.check_in_time
+            # إذا كان check_in بدون منطقة زمنية، أضف منطقة دمشق
+            if check_in.tzinfo is None:
+                check_in = damascus_tz.localize(check_in)
+            else:
+                check_in = check_in.astimezone(damascus_tz)
             
-            # ساعات العمل الفعلية في المكتب
+            check_out = current_time.astimezone(damascus_tz)  # ✅ تأكد من المنطقة الزمنية
+            
+            # ✅ إضافة: تحقق من أن الخروج بعد الدخول
+            if check_out <= check_in:
+                print(f"❌ خطأ: وقت الخروج {check_out} قبل أو يساوي وقت الدخول {check_in}")
+                # استخدم وقت افتراضي (نهاية الدوام + 30 دقيقة)
+                work_end = employee.work_end_time
+                work_end_dt = damascus_tz.localize(datetime.combine(today, work_end))
+                check_out = work_end_dt + timedelta(minutes=30)
+                print(f"⚠️ تم استخدام وقت افتراضي للخروج: {check_out}")
+            
+            # ✅ إضافة: تسجيل للأغراض التشخيصية
+            print(f"🔍 تصحيح الأوقات - الدخول: {check_in}, الخروج: {check_out}")
+            
+            # حساب ساعات العمل الفعلية
             work_seconds = (check_out - check_in).total_seconds()
+            
+            # ✅ إضافة: تحقق من عدم سالبية المدة
+            if work_seconds < 0:
+                print(f"❌ خطأ: مدة العمل سالبة! {work_seconds} ثانية")
+                work_seconds = 0  # استخدم صفر كقيمة آمنة
+            
             office_work_hours = round(work_seconds / 3600, 2)
             record.office_work_hours = office_work_hours
+            
+            # ✅ إضافة: تسجيل القيم المحسوبة
+            print(f"📊 الحسابات - office_work_hours: {office_work_hours}, work_seconds: {work_seconds}")
         
             # ✅ تحديث: حساب ساعات العمل ضمن الدوام مع مراعاة فترة السماح
             work_start = employee.work_start_time
@@ -733,6 +761,9 @@ def perform_auto_checkout_now(employee, record, current_time, damascus_tz):
                 work_hours_within = 0
             
             record.work_hours = work_hours_within
+            
+            # ✅ إضافة: تسجيل النتائج النهائية
+            print(f"📋 النتائج النهائية - office: {record.office_work_hours}, work: {record.work_hours}")
         
         db.session.commit()
         print(f"✓ تم الخروج التلقائي للموظف {employee.full_name_arabic} (ID: {employee.id})")
@@ -7962,6 +7993,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
