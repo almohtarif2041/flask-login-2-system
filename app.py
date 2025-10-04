@@ -426,7 +426,6 @@ def telegram_webhook():
 # ==========================================
 # 2. أضف نظام الـ Cron فقط
 # ==========================================
-
 import os
 import secrets
 from datetime import datetime, timedelta
@@ -434,7 +433,167 @@ import pytz
 
 # مفتاح سري للـ cron endpoint
 CRON_SECRET_KEY = os.environ.get('CRON_SECRET_KEY', 'temporary-key-change-later')
+@app.route('/cron/daily-leave-check', methods=['GET', 'POST'])
+def cron_daily_leave_check():
+    """
+    نقطة الوصول للتحقق اليومي من الإجازات والعطل - تعمل يومياً عند منتصف الليل
+    """
+    # التحقق من المفتاح السري
+    provided_key = request.args.get('key') or request.headers.get('X-Cron-Key')
+    
+    if provided_key != CRON_SECRET_KEY:
+        return jsonify({'error': 'Unauthorized', 'message': 'مفتاح غير صحيح'}), 401
+    
+    try:
+        damascus_tz = pytz.timezone('Asia/Damascus')
+        current_time = datetime.now(damascus_tz)
+        today = current_time.date()
+        
+        processed_count = 0
+        error_count = 0
+        employees_processed = []
+        
+        # ✅ تسجيل وقت البدء للرصد
+        start_time = datetime.now()
+        
+        # جلب جميع الموظفين النشطين
+        all_employees = Employee.query.all()
+        
+        print(f"🔍 فحص {len(all_employees)} موظف للتحقق من الإجازات والعطل...")
+        
+        for employee in all_employees:
+            try:
+                employee_updated = False
+                
+                # 1. التحقق من الإجازات المقررة للموظف
+                leave_status = check_employee_leave_status(employee, today)
+                
+                if employee.is_leave != leave_status:
+                    employee.is_leave = leave_status
+                    employee_updated = True
+                
+                # 2. التحقق من العطل الرسمية
+                vacation_status = check_company_vacation_status(today)
+                
+                if employee.is_vacation != vacation_status:
+                    employee.is_vacation = vacation_status
+                    employee_updated = True
+                
+                # 3. التحقق من العطلة الأسبوعية
+                weekly_off_status = check_weekly_day_off_status(employee, today, damascus_tz)
+                
+                if employee.is_weekly_day_off != weekly_off_status:
+                    employee.is_weekly_day_off = weekly_off_status
+                    employee_updated = True
+                
+                # حفظ التغييرات إذا كان هناك تحديث
+                if employee_updated:
+                    db.session.commit()
+                    processed_count += 1
+                    
+                    employees_processed.append({
+                        'id': employee.id,
+                        'name': employee.full_name_arabic,
+                        'is_leave': employee.is_leave,
+                        'is_vacation': employee.is_vacation,
+                        'is_weekly_day_off': employee.is_weekly_day_off
+                    })
+                    
+                    print(f"✓ تم تحديث حالة الموظف {employee.full_name_arabic}: إجازة={employee.is_leave}, عطلة={employee.is_vacation}, أسبوعية={employee.is_weekly_day_off}")
+                    
+            except Exception as e:
+                error_count += 1
+                print(f"❌ خطأ في معالجة الموظف {employee.id}: {str(e)}")
+                db.session.rollback()
+                continue
+        
+        # ✅ حساب وقت التنفيذ
+        execution_time = (datetime.now() - start_time).total_seconds()
+        
+        return jsonify({
+            'success': True,
+            'processed': processed_count,
+            'errors': error_count,
+            'employees': employees_processed,
+            'timestamp': current_time.isoformat(),
+            'execution_time_seconds': round(execution_time, 2),
+            'total_employees': len(all_employees),
+            'message': f'✓ تمت معالجة {processed_count} موظف بنجاح'
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ خطأ عام في cron اليومي: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
+def check_employee_leave_status(employee, today):
+    """
+    التحقق من وجود إجازات معتمدة للموظف في اليوم المحدد
+    """
+    try:
+        # البحث عن طلبات الإجازة المعتمدة التي تشمل اليوم المطلوب
+        approved_leaves = LeaveRequest.query.filter_by(
+            employee_id=employee.id,
+            status='approved'
+        ).filter(
+            LeaveRequest.start_date <= today,
+            db.or_(
+                LeaveRequest.end_date >= today,
+                LeaveRequest.end_date.is_(None)
+            )
+        ).all()
+        
+        if approved_leaves:
+            for leave in approved_leaves:
+                # إذا كانت الإجازة ليوم واحد
+                if leave.type == 'daily' and leave.start_date == today:
+                    return 'on'
+                
+                # إذا كانت الإجازة متعددة الأيام
+                elif leave.type == 'multi-day' and leave.start_date <= today <= leave.end_date:
+                    return 'on'
+                
+                # إذا كانت إجازة ساعية في اليوم الحالي
+                elif leave.type == 'hourly' and leave.start_date == today:
+                    return 'on'
+        
+        return 'off'
+        
+    except Exception as e:
+        print(f"❌ خطأ في التحقق من إجازات الموظف {employee.id}: {str(e)}")
+        return 'off'
+
+def check_company_vacation_status(today):
+    """
+    التحقق من وجود عطلة رسمية في اليوم المحدد
+    """
+    try:
+        # البحث عن العطل الرسمية في اليوم المحدد
+        holiday = OfficialHoliday.query.filter_by(holiday_date=today).first()
+        
+        return 'on' if holiday else 'off'
+        
+    except Exception as e:
+        print(f"❌ خطأ في التحقق من العطل الرسمية: {str(e)}")
+        return 'off'
+
+def check_weekly_day_off_status(employee, today, timezone):
+    """
+    التحقق من إذا كان اليوم هو العطلة الأسبوعية للموظف
+    """
+    try:
+        # تحويل اليوم الحالي إلى اسم اليوم بالإنجليزية
+        days_english = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        today_english = days_english[today.weekday()]
+        
+        # المقارنة مع العطلة الأسبوعية للموظف
+        return 'on' if employee.weekly_day_off == today_english else 'off'
+        
+    except Exception as e:
+        print(f"❌ خطأ في التحقق من العطلة الأسبوعية للموظف {employee.id}: {str(e)}")
+        return 'off'
 @app.route('/cron/auto-checkout', methods=['GET', 'POST'])
 def cron_auto_checkout():
     """
@@ -7764,6 +7923,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
