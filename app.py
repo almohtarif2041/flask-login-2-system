@@ -686,7 +686,7 @@ def cron_auto_checkout():
 
 def perform_auto_checkout_now(employee, record, current_time, damascus_tz):
     """
-    تنفيذ الخروج التلقائي لموظف معين
+    تنفيذ الخروج التلقائي لموظف معين مع دعم فترة السماح
     """
     try:
         today = current_time.date()
@@ -707,14 +707,23 @@ def perform_auto_checkout_now(employee, record, current_time, damascus_tz):
             office_work_hours = round(work_seconds / 3600, 2)
             record.office_work_hours = office_work_hours
         
-            # ساعات العمل ضمن الدوام الرسمي
-            work_start_dt = datetime.combine(today, employee.work_start_time)
-            work_end_dt = datetime.combine(today, employee.work_end_time)
+            # ✅ تحديث: حساب ساعات العمل ضمن الدوام مع مراعاة فترة السماح
+            work_start = employee.work_start_time
+            work_end = employee.work_end_time
             
-            work_start_dt = damascus_tz.localize(work_start_dt)
-            work_end_dt = damascus_tz.localize(work_end_dt)
+            work_start_dt = damascus_tz.localize(datetime.combine(today, work_start))
+            work_end_dt = damascus_tz.localize(datetime.combine(today, work_end))
             
-            start_work = max(check_in, work_start_dt)
+            # ✅ إضافة: تعديل وقت البداية لاحتساب فترة السماح (15 دقيقة)
+            adjusted_start_time = work_start_dt + timedelta(minutes=15)
+            
+            # إذا دخل خلال فترة السماح (من 9:00 إلى 9:15) يعتبر كأنه دخل في 9:00
+            if check_in <= adjusted_start_time:
+                effective_start_time = work_start_dt
+            else:
+                effective_start_time = check_in
+            
+            start_work = max(effective_start_time, work_start_dt)
             end_work = min(check_out, work_end_dt)
             
             if start_work < end_work:
@@ -728,7 +737,7 @@ def perform_auto_checkout_now(employee, record, current_time, damascus_tz):
         db.session.commit()
         print(f"✓ تم الخروج التلقائي للموظف {employee.full_name_arabic} (ID: {employee.id})")
         
-        # إرسال إشعار تيليجرام
+        # ✅ العودة للرسالة القديمة
         if employee.telegram_chatid:
             telegram_message = f"""🔔 <b>خروج تلقائي</b>
 
@@ -4678,20 +4687,14 @@ def handle_attendance():
         supervisor = None
         
         if department and department.supervisors:
-            # بما أن كل قسم له مشرف واحد فقط، نأخذ أول مشرف
             supervisor = department.supervisors[0]
         
-        # إذا لم يوجد مشرف، نبحث عن مشرف بديل
         if not supervisor:
-            # نبحث عن أي مشرف في النظام
             fallback_supervisor = Supervisor.query.first()
-            
             if fallback_supervisor:
                 supervisor = fallback_supervisor
-                # تسجيل خطأ في السجلات
                 print(f"لم يتم العثور على مشرف للقسم {employee.department_id}، تم استخدام مشرف بديل: {supervisor.supervisor_ID}")
             else:
-                # في حالة عدم وجود أي مشرف في النظام
                 print("لا يوجد أي مشرفين في النظام!")
                 return jsonify({
                     'success': False,
@@ -4716,15 +4719,14 @@ def handle_attendance():
             db.session.add(new_record)
             db.session.commit()
 
-            # ❌ تم تعليق جدولة الخروج التلقائي - النظام يعتمد على الـ Cron الخارجي الآن
-            # schedule_auto_checkout(employee.id, employee.work_end_time)
-
+            # حساب وقت التأخير (15 دقيقة بدلاً من 16)
             start_time = employee.work_start_time
             actual_start = damascus_tz.localize(datetime.combine(today, start_time))
-            delay_start_time = actual_start + timedelta(minutes=16)
+            grace_period_end = actual_start + timedelta(minutes=15)  # فترة السماح 15 دقيقة
             
-            if current_time > delay_start_time:
-                delay_seconds = (current_time - delay_start_time).total_seconds()
+            # إذا دخل بعد فترة السماح (9:16 فما فوق)
+            if current_time > grace_period_end:
+                delay_seconds = (current_time - grace_period_end).total_seconds()
                 delay_minutes = int(delay_seconds // 60)
                 
                 delay_record = WorkDelayArchive(
@@ -4732,7 +4734,7 @@ def handle_attendance():
                     supervisor_id=supervisor.supervisor_ID,
                     date=today,
                     minutes_delayed=delay_minutes,
-                    from_timestamp=delay_start_time,
+                    from_timestamp=grace_period_end,
                     to_timestamp=current_time,
                     status='Unjustified',
                     delay_note=f'تأخير غير مبرر: {delay_minutes} دقيقة'
@@ -4743,15 +4745,15 @@ def handle_attendance():
                 # إرسال إشعار للمشرف
                 supervisor_employee = supervisor.employee
                 if supervisor_employee and supervisor_employee.telegram_chatid:
-                    allowed_start_time = actual_start + timedelta(minutes=16)
                     message = (
                         f"🔔 <b>إشعار تأخير موظف</b>\n\n"
                         f"• الموظف: <b>{employee.full_name_arabic}</b>\n"
                         f"• القسم: <b>{department.dep_name if department else 'غير معروف'}</b>\n"
                         f"• مدة التأخير: <b>{delay_minutes} دقيقة</b>\n"
                         f"• وقت الدخول الفعلي: <b>{current_time.strftime('%Y-%m-%d %I:%M %p')}</b>\n"
-                        f"• فترة التأخير: من <b>{allowed_start_time.strftime('%I:%M %p')}</b> "
-                        f"إلى <b>{current_time.strftime('%I:%M %p')}</b>"
+                        f"• فترة التأخير: من <b>{grace_period_end.strftime('%I:%M %p')}</b> "
+                        f"إلى <b>{current_time.strftime('%I:%M %p')}</b>\n"
+                        f"• ملاحظة: فترة السماح للدخول 15 دقيقة بعدها تصبح متأخر"
                     )
                     send_telegram_message(supervisor_employee.telegram_chatid, message)
             
@@ -4765,9 +4767,6 @@ def handle_attendance():
             employee.status = 'off'
             db.session.commit()
 
-            # ❌ تم تعليق إلغاء الخروج التلقائي المجدول - النظام يعتمد على الـ Cron الخارجي الآن
-            # cancel_auto_checkout(employee.id)
-
             existing_record.check_out_time = current_time
             
             if existing_record.check_in_time:
@@ -4779,14 +4778,23 @@ def handle_attendance():
                 office_work_hours = round(work_seconds / 3600, 2)
                 existing_record.office_work_hours = office_work_hours
             
-                # حساب ساعات العمل ضمن الدوام
+                # حساب ساعات العمل ضمن الدوام مع مراعاة فترة السماح
                 work_start = employee.work_start_time
                 work_end = employee.work_end_time
                 
                 work_start_dt = damascus_tz.localize(datetime.combine(today, work_start))
                 work_end_dt = damascus_tz.localize(datetime.combine(today, work_end))
                 
-                start_work = max(check_in, work_start_dt)
+                # تعديل وقت البداية لاحتساب فترة السماح
+                adjusted_start_time = work_start_dt + timedelta(minutes=15)
+                
+                # إذا دخل خلال فترة السماح (من 9:00 إلى 9:15) يعتبر كأنه دخل في 9:00
+                if check_in <= adjusted_start_time:
+                    effective_start_time = work_start_dt
+                else:
+                    effective_start_time = check_in
+                
+                start_work = max(effective_start_time, work_start_dt)
                 end_work = min(check_out, work_end_dt)
                 
                 if start_work < end_work:
@@ -7923,6 +7931,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
