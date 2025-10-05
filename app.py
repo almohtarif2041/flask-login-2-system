@@ -3090,7 +3090,8 @@ def employee_statistics():
         weekly_off_day_num = day_mapping.get(weekly_day_off, 4)
         
         print(f"📅 Weekly day off: {weekly_day_off} (day number: {weekly_off_day_num})")
-                # حساب عدد ساعات العمل اليومية للموظف
+        
+        # حساب عدد ساعات العمل اليومية للموظف
         def get_work_hours(start_time, end_time):
             # تحويل Time إلى datetime اليومي
             dt_start = datetime.combine(date.today(), start_time)
@@ -3098,7 +3099,6 @@ def employee_statistics():
             return (dt_end - dt_start).total_seconds() / 3600  # بالساعة
         daily_hours = get_work_hours(employee.work_start_time, employee.work_end_time)
 
-        # 3. جلب الإجازات الموافق عليها ضمن الفترة
         # 3. جلب الإجازات الموافق عليها ضمن الفترة
         leaves = db.session.query(
             LeaveRequest.id,
@@ -3137,8 +3137,12 @@ def employee_statistics():
         for lv in leaves:
             if lv.type == 'hourly':
                 total_leave_hours += (lv.hours_requested or 0)
-            else:
-                # تحديد التداخل بين فترة الإجازة والفترة المطلوبة
+            elif lv.type == 'daily':
+                # الإجازة اليومية: نتحقق فقط من أن تاريخها ضمن الفترة
+                if start_date <= lv.start_date <= end_date:
+                    total_leave_hours += daily_hours
+            else:  # multi-day
+                # الإجازة المتعددة الأيام: نحسب فترة التداخل
                 overlap_start = max(lv.start_date, start_date)
                 overlap_end   = min(lv.end_date,   end_date)
                 if overlap_start <= overlap_end:
@@ -3148,6 +3152,7 @@ def employee_statistics():
         # 5. تفصيل الساعات إلى ساعات + دقائق للعرض
         hourss = int(round(total_leave_hours * 60))  # 480
         print("leave totola hours",hourss)
+        
         # 4. حساب أيام العمل المتوقعة
         total_expected_work_days = 0
         expected_work_dates = []
@@ -3242,40 +3247,6 @@ def employee_statistics():
         
         # ============== حساب الإجازات بالساعات الفعلية (التعديل الجديد) ==============
         
-        # استرجاع جميع طلبات الإجازات المعتمدة للموظف
-        # حساب الإجازات
-        leaves = db.session.query(
-            LeaveRequest.id,
-            LeaveRequest.type,
-            LeaveRequest.classification,
-            LeaveRequest.start_date,
-            LeaveRequest.end_date,
-            LeaveRequest.hours_requested
-        ).filter(
-            LeaveRequest.employee_id == employee.id,
-            LeaveRequest.status == 'approved',
-            or_(
-                # إجازة ساعية تقع بدايتها ضمن المدى
-                and_(
-                    LeaveRequest.type == 'hourly',
-                    LeaveRequest.start_date >= start_date,
-                    LeaveRequest.start_date <= end_date
-                ),
-                # إجازة يومية تقع ضمن المدى
-                and_(
-                    LeaveRequest.type == 'daily',
-                    LeaveRequest.start_date >= start_date,
-                    LeaveRequest.start_date <= end_date
-                ),
-                # إجازة متعددة الأيام تتداخل مع المدى
-                and_(
-                    LeaveRequest.type == 'multi-day',
-                    LeaveRequest.start_date <= end_date,
-                    LeaveRequest.end_date >= start_date
-                )
-            )
-        ).all()
-
         print(f"📋 Approved leaves found: {len(leaves)}")
         for i, leave in enumerate(leaves, 1):
             print(f"   {i}. ID: {leave.id}, Type: {leave.type}, Classification: {leave.classification}")
@@ -3300,16 +3271,28 @@ def employee_statistics():
                     leave_types_breakdown[leave.type] += hours
                 else:
                     leave_types_breakdown[leave.type] = hours
-            else:
-                # الإجازات اليومية والمتعددة الأيام: نحسب الأيام الفعلية
-                # تحديد فترة التداخل مع الفترة المطلوبة
+            elif leave.type == 'daily':
+                # الإجازة اليومية: نتحقق فقط من أن تاريخها ضمن الفترة
+                if start_date <= leave.start_date <= end_date:
+                    hours_in_period = hours_per_day
+                    leave_hours_taken[classification] += hours_in_period
+                    
+                    # تحديث تفاصيل الأنواع
+                    if leave.type in leave_types_breakdown:
+                        leave_types_breakdown[leave.type] += hours_in_period
+                    else:
+                        leave_types_breakdown[leave.type] = hours_in_period
+                    
+                    print(f"   📅 Daily leave: 1 day ({hours_in_period} hours) added")
+            else:  # multi-day
+                # الإجازة المتعددة الأيام: نحسب فترة التداخل
                 overlap_start = max(leave.start_date, start_date)
                 overlap_end = min(leave.end_date, end_date)
                 
                 # حساب الأيام الفعلية في الفترة
                 if overlap_start <= overlap_end:
                     days_in_period = (overlap_end - overlap_start).days + 1
-                    hours_in_period = days_in_period * hours_per_day  # استخدام ساعات العمل الخاصة بالموظف
+                    hours_in_period = days_in_period * hours_per_day
                     leave_hours_taken[classification] += hours_in_period
                     
                     # تحديث تفاصيل الأنواع
@@ -3319,6 +3302,7 @@ def employee_statistics():
                         leave_types_breakdown[leave.type] = hours_in_period
                     
                     print(f"   📅 Multi-day leave: {days_in_period} days ({hours_in_period} hours) added")
+        
         regular_leave_hours = employee.regular_leave_hours or 0
         normal_leave_taken = leave_hours_taken.get("normal", 0)
         emergency_hours = employee.emergency_leave_hours or 0
@@ -3326,20 +3310,22 @@ def employee_statistics():
 
         sick_hours = employee.sick_leave_hours or 0
         sick_taken = leave_hours_taken.get("sick", 0)
+        
         # تحويل إجمالي الساعات لكل نوع إلى أيام
         leave_types_result = {}
         for leave_type, total_hours in leave_types_breakdown.items():
             leave_types_result[leave_type] = {
                 "hours": total_hours,
-                "days": round(total_hours / hours_per_day, 2)  # استخدام ساعات العمل الخاصة بالموظف
+                "days": round(total_hours / hours_per_day, 2)
             }
 
         # حساب الإجازات المأخوذة بالأيام لكل تصنيف
         leave_days_taken = {
-            "normal": round(leave_hours_taken["normal"] / hours_per_day, 2),     # استخدام ساعات العمل الخاصة بالموظف
-            "emergency": round(leave_hours_taken["emergency"] / hours_per_day, 2), # استخدام ساعات العمل الخاصة بالموظف
-            "sick": round(leave_hours_taken["sick"] / hours_per_day, 2)          # استخدام ساعات العمل الخاصة بالموظف
+            "normal": round(leave_hours_taken["normal"] / hours_per_day, 2),
+            "emergency": round(leave_hours_taken["emergency"] / hours_per_day, 2),
+            "sick": round(leave_hours_taken["sick"] / hours_per_day, 2)
         }
+        
         # رصيد الإجازات بالساعات والأيام
         leave_balance_hours = {
             "normal": employee.regular_leave_hours,
@@ -3352,6 +3338,7 @@ def employee_statistics():
             "emergency": round((employee.emergency_leave_hours or 0) / hours_per_day, 2),
             "sick": round((employee.sick_leave_hours or 0) / hours_per_day, 2)
         }
+        
         # الرصيد المتبقي
         remaining_leave_hours = {
             "normal": max(0, regular_leave_hours - normal_leave_taken),
@@ -3451,8 +3438,8 @@ def employee_statistics():
             AdditionalAttendanceRecord.notes,
             AdditionalAttendanceRecord.role,
             AdditionalAttendanceRecord.is_holiday,
-            AdditionalAttendanceRecord.start_time,  # ✅ أضف هذا
-            AdditionalAttendanceRecord.end_time     # ✅ وأيضًا هذا
+            AdditionalAttendanceRecord.start_time,
+            AdditionalAttendanceRecord.end_time
         ).filter(
             AdditionalAttendanceRecord.employee_id == employee_id,
             AdditionalAttendanceRecord.status == "approved",
@@ -3474,8 +3461,9 @@ def employee_statistics():
                 "start_time": "-",
                 "end_time": "-",
                 "notes": rec.notes or "-",
-                "type": type_description  # ✅ نرسل النص النهائي هنا مباشرة
+                "type": type_description
             })
+        
         # دمج السجلات في جدول واحد (محدث)
         merged_records = []
 
@@ -3490,6 +3478,7 @@ def employee_statistics():
                 "type": "تعويض",
                 "day_type": "-"
             })
+        
         for rec in add_att_recs:
             if rec.is_holiday:
                 type_description = "إضافي - عطلة"
@@ -3499,17 +3488,19 @@ def employee_statistics():
                 "date": rec.date.strftime("%Y-%m-%d"),
                 "duration_minutes": rec.add_attendance_minutes,
                 "duration_hours": round(rec.add_attendance_minutes / 60, 2),
-                "start_time": rec.start_time.strftime("%H:%M") if rec.start_time else "-",  # ✅ وقت البداية بصيغة 08:30 مثلاً
-                "end_time": rec.end_time.strftime("%H:%M") if rec.end_time else "-",        # ✅ وقت النهاية
+                "start_time": rec.start_time.strftime("%H:%M") if rec.start_time else "-",
+                "end_time": rec.end_time.strftime("%H:%M") if rec.end_time else "-",
                 "notes": rec.notes or "-",
                 "type": type_description
             })
+        
         # ترتيب حسب التاريخ تصاعدياً
         merged_records.sort(key=lambda x: x["date"])
         
         # ============== إعداد النتيجة النهائية ==============
         
         absent_days = max(0, total_expected_work_days - present_days)
+        
         # ============== حساب الراتب ==============
         
         # جلب مكونات الراتب للموظف
@@ -3536,7 +3527,8 @@ def employee_statistics():
             daily_transport_allowance = salary_component.transport_allowance or 0
             daily_depreciation_allowance = salary_component.depreciation_allowance or 0
             daily_administrative_allowance = salary_component.administrative_allowance or 0
-                        # 3. حساب مجموع البدلات بالدقة
+            
+            # 3. حساب مجموع البدلات بالدقة
             internet_allowance = daily_internet_allowance * present_days
             transport_allowance = daily_transport_allowance * present_days
             depreciation_allowance = daily_depreciation_allowance * present_days
@@ -3546,10 +3538,12 @@ def employee_statistics():
             print(f"6) Transport Allowance: {transport_allowance}")
             print(f"7) Depreciation Allowance: {depreciation_allowance}")
             print(f"7) administrative_allowance: {administrative_allowance}")
+            
             # 3. قراءة الاستقطاعات
             daily_administrative_deduction = salary_component.administrative_deduction or 0
             administrative_deduction = daily_administrative_deduction * present_days
             print(f"8) administrative Deduction: {administrative_deduction}")
+            
             holiday_overtime_rate_dec = Decimal(str(holiday_overtime_rate))
             overtime_rate_dec = Decimal(str(overtime_rate))
             internet_allowance_dec = Decimal(str(internet_allowance))
@@ -3593,8 +3587,6 @@ def employee_statistics():
             net_salary = gross_salary - total_deductions
             print(f"19) Net Salary = Gross Salary - Total Deductions = {gross_salary} - {total_deductions} = {net_salary}")
 
-
-            
             salary_info = {
                 "base_salary": base_salary,
                 "hour_salary": hour_salary,
@@ -3636,6 +3628,7 @@ def employee_statistics():
             salary_info = {
                 "error": "No salary component found for this employee"
             }
+        
         # استعلام جمع دقائق التأخير غير المبرر حسب الفترة والموظف
         total_unjustified_delay = db.session.query(
             func.coalesce(func.sum(WorkDelayArchive.minutes_delayed), 0)
@@ -3645,6 +3638,7 @@ def employee_statistics():
             WorkDelayArchive.date >= start_date,
             WorkDelayArchive.date <= end_date
         ).scalar()
+        
         # النتيجة النهائية
         result = {
             "employee_info": {
@@ -3665,7 +3659,7 @@ def employee_statistics():
                 "attendance_percentage": round((present_days / total_expected_work_days * 100) if total_expected_work_days > 0 else 0, 2)
             },
             "time_stats": {
-                "hourss": str(round(hourss / 60, 2)),  # "2"
+                "hourss": str(round(hourss / 60, 2)),
                 "minutess": str(hourss), 
                 "total_unjustified_delay_minutes": total_unjustified_delay,
                 "total_unjustified_delay_hours": round(total_unjustified_delay / 60, 2),
@@ -3703,6 +3697,7 @@ def employee_statistics():
             "additional_attendance_records": additional_records,
             "merged_records": merged_records
         }
+        
         print(f"📤 Final result:")
         print(f"   Present days: {result['attendance_stats']['present_days']}")
         print(f"   Total work hours: {result['time_stats']['total_work_hours']}")
@@ -3711,6 +3706,7 @@ def employee_statistics():
         print(f"   Net salary: {result['salary_info'].get('net_salary', 'N/A')}")
         
         return jsonify(result)
+        
     except ValueError as ve:
         print(f"❌ ValueError: {str(ve)}")
         return jsonify({"error": f"Invalid date format: {str(ve)}"}), 400
@@ -8015,6 +8011,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
