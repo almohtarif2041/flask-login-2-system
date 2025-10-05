@@ -3099,6 +3099,7 @@ def employee_statistics():
         daily_hours = get_work_hours(employee.work_start_time, employee.work_end_time)
 
         # 3. جلب الإجازات الموافق عليها ضمن الفترة
+        # 3. جلب الإجازات الموافق عليها ضمن الفترة
         leaves = db.session.query(
             LeaveRequest.id,
             LeaveRequest.type,
@@ -3116,12 +3117,17 @@ def employee_statistics():
                     LeaveRequest.start_date >= start_date,
                     LeaveRequest.start_date <= end_date
                 ),
-                # إجازة يومية أو متعددة الأيام تتداخل مع المدى
+                # إجازة يومية تقع ضمن المدى
                 and_(
-                    LeaveRequest.type != 'hourly',
+                    LeaveRequest.type == 'daily',
+                    LeaveRequest.start_date >= start_date,
+                    LeaveRequest.start_date <= end_date
+                ),
+                # إجازة متعددة الأيام تتداخل مع المدى
+                and_(
+                    LeaveRequest.type == 'multi-day',
                     LeaveRequest.start_date <= end_date,
-                    LeaveRequest.end_date   >= start_date,
-                    LeaveRequest.end_date.isnot(None)
+                    LeaveRequest.end_date >= start_date
                 )
             )
         ).all()
@@ -3237,6 +3243,7 @@ def employee_statistics():
         # ============== حساب الإجازات بالساعات الفعلية (التعديل الجديد) ==============
         
         # استرجاع جميع طلبات الإجازات المعتمدة للموظف
+        # حساب الإجازات
         leaves = db.session.query(
             LeaveRequest.id,
             LeaveRequest.type,
@@ -3245,19 +3252,26 @@ def employee_statistics():
             LeaveRequest.end_date,
             LeaveRequest.hours_requested
         ).filter(
-            LeaveRequest.employee_id == employee_id,
+            LeaveRequest.employee_id == employee.id,
             LeaveRequest.status == 'approved',
             or_(
+                # إجازة ساعية تقع بدايتها ضمن المدى
                 and_(
                     LeaveRequest.type == 'hourly',
                     LeaveRequest.start_date >= start_date,
                     LeaveRequest.start_date <= end_date
                 ),
+                # إجازة يومية تقع ضمن المدى
                 and_(
-                    LeaveRequest.type != 'hourly',
+                    LeaveRequest.type == 'daily',
+                    LeaveRequest.start_date >= start_date,
+                    LeaveRequest.start_date <= end_date
+                ),
+                # إجازة متعددة الأيام تتداخل مع المدى
+                and_(
+                    LeaveRequest.type == 'multi-day',
                     LeaveRequest.start_date <= end_date,
-                    LeaveRequest.end_date >= start_date,
-                    LeaveRequest.end_date.isnot(None)
+                    LeaveRequest.end_date >= start_date
                 )
             )
         ).all()
@@ -3841,6 +3855,7 @@ def export_all_employees_to_excel():
                     hours_per_day = 8.0
                 
                 # حساب الإجازات
+                # حساب الإجازات
                 leaves = db.session.query(
                     LeaveRequest.id,
                     LeaveRequest.type,
@@ -3852,16 +3867,23 @@ def export_all_employees_to_excel():
                     LeaveRequest.employee_id == employee.id,
                     LeaveRequest.status == 'approved',
                     or_(
+                        # إجازة ساعية تقع بدايتها ضمن المدى
                         and_(
                             LeaveRequest.type == 'hourly',
                             LeaveRequest.start_date >= start_date,
                             LeaveRequest.start_date <= end_date
                         ),
+                        # إجازة يومية تقع ضمن المدى
                         and_(
-                            LeaveRequest.type != 'hourly',
+                            LeaveRequest.type == 'daily',
+                            LeaveRequest.start_date >= start_date,
+                            LeaveRequest.start_date <= end_date
+                        ),
+                        # إجازة متعددة الأيام تتداخل مع المدى
+                        and_(
+                            LeaveRequest.type == 'multi-day',
                             LeaveRequest.start_date <= end_date,
-                            LeaveRequest.end_date >= start_date,
-                            LeaveRequest.end_date.isnot(None)
+                            LeaveRequest.end_date >= start_date
                         )
                     )
                 ).all()
@@ -7993,6 +8015,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
