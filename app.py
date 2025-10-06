@@ -4771,7 +4771,7 @@ def handle_attendance():
             # حساب وقت التأخير (15 دقيقة بدلاً من 16)
             start_time = employee.work_start_time
             actual_start = damascus_tz.localize(datetime.combine(today, start_time))
-            grace_period_end = actual_start + timedelta(minutes=15)  # فترة السماح 15 دقيقة
+            grace_period_end = actual_start + timedelta(minutes=16)  # فترة السماح 15 دقيقة
             
             # إذا دخل بعد فترة السماح (9:16 فما فوق)
             if current_time > grace_period_end:
@@ -8011,6 +8011,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
