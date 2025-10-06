@@ -3649,15 +3649,42 @@ def employee_statistics():
                 "error": "No salary component found for this employee"
             }
         
-        # استعلام جمع دقائق التأخير غير المبرر حسب الفترة والموظف
-        total_unjustified_delay = db.session.query(
-            func.coalesce(func.sum(WorkDelayArchive.minutes_delayed), 0)
+        # ============== حساب التأخير الغير مبرر من جدول WorkDelayArchive ==============
+        
+        # استعلام لحساب أول تأخير في كل يوم (التأخير الأقدم زمنياً في حال تعدد التأخيرات)
+        # نستخدم subquery للحصول على أقدم timestamp لكل يوم
+        subquery = db.session.query(
+            WorkDelayArchive.date,
+            func.min(WorkDelayArchive.from_timestamp).label('first_delay_time')
         ).filter(
             WorkDelayArchive.status == 'Unjustified',
             WorkDelayArchive.employee_id == employee_id,
             WorkDelayArchive.date >= start_date,
             WorkDelayArchive.date <= end_date
-        ).scalar()
+        ).group_by(WorkDelayArchive.date).subquery()
+        
+        # الآن نجلب دقائق التأخير للسجلات التي تطابق أول تأخير في كل يوم
+        first_delays = db.session.query(
+            WorkDelayArchive.date,
+            WorkDelayArchive.minutes_delayed,
+            WorkDelayArchive.from_timestamp
+        ).join(
+            subquery,
+            and_(
+                WorkDelayArchive.date == subquery.c.date,
+                WorkDelayArchive.from_timestamp == subquery.c.first_delay_time
+            )
+        ).filter(
+            WorkDelayArchive.status == 'Unjustified',
+            WorkDelayArchive.employee_id == employee_id
+        ).all()
+        
+        # حساب إجمالي دقائق التأخير الأولى فقط
+        total_unjustified_delay = sum(delay.minutes_delayed for delay in first_delays)
+        
+        print(f"⏰ First delays found: {len(first_delays)} days with delays")
+        for delay in first_delays:
+            print(f"   Date: {delay.date}, Minutes: {delay.minutes_delayed}, Time: {delay.from_timestamp}")
         
         # النتيجة النهائية
         result = {
@@ -8031,6 +8058,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
