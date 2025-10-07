@@ -3132,7 +3132,25 @@ def employee_statistics():
             )
         ).all()
 
-        # 4. حساب الساعات الفعلية المأخوذة بحسب النوع
+        # 4. حساب التأخيرات المبررة ضمن الفترة (التعديل الجديد)
+        justified_delays = db.session.query(
+            WorkDelayArchive.date,
+            WorkDelayArchive.minutes_delayed
+        ).filter(
+            WorkDelayArchive.employee_id == employee_id,
+            WorkDelayArchive.status == 'Justified',
+            WorkDelayArchive.date >= start_date,
+            WorkDelayArchive.date <= end_date
+        ).all()
+
+        # حساب ساعات التأخير المبررة
+        total_justified_delay_hours = sum(delay.minutes_delayed for delay in justified_delays) / 60.0
+        
+        print(f"⏰ Justified delays found: {len(justified_delays)}")
+        for delay in justified_delays:
+            print(f"   Date: {delay.date}, Minutes: {delay.minutes_delayed}, Hours: {delay.minutes_delayed/60:.2f}")
+
+        # 5. حساب الساعات الفعلية المأخوذة بحسب النوع (بما في ذلك التأخيرات المبررة)
         total_leave_hours = 0.0
         for lv in leaves:
             if lv.type == 'hourly':
@@ -3149,11 +3167,14 @@ def employee_statistics():
                     days = (overlap_end - overlap_start).days + 1
                     total_leave_hours += days * daily_hours
 
-        # 5. تفصيل الساعات إلى ساعات + دقائق للعرض
-        hourss = int(round(total_leave_hours * 60))  # 480
-        print("leave totola hours",hourss)
+        # إضافة ساعات التأخير المبررة إلى إجمالي ساعات الإجازات
+        total_leave_hours += total_justified_delay_hours
         
-        # 4. حساب أيام العمل المتوقعة
+        # 6. تفصيل الساعات إلى ساعات + دقائق للعرض
+        hourss = int(round(total_leave_hours * 60))  # 480
+        print("leave total hours", hourss)
+        
+        # 7. حساب أيام العمل المتوقعة
         total_expected_work_days = 0
         expected_work_dates = []
         current_date = start_date
@@ -3174,9 +3195,9 @@ def employee_statistics():
         print(f"📈 Total expected work days: {total_expected_work_days}")
         print(f"   Expected work dates: {expected_work_dates}")
         
-        # ============== التعديل: حساب التأخير لأول حضور فقط في نفس اليوم ==============
+        # ============== حساب التأخير لأول حضور فقط في نفس اليوم ==============
         
-        # 5. حساب أيام الحضور الفعلية والتأخير
+        # 8. حساب أيام الحضور الفعلية والتأخير
         actual_attendance_dates = set()
         total_work_hours = 0
         total_delay_minutes = 0
@@ -3265,17 +3286,18 @@ def employee_statistics():
         print(f"👤 Employee work hours: {hours_per_day} hours per day")
         print(f"   Work time: {work_start_time} - {work_end_time}")
         
-        # ============== حساب الإجازات بالساعات الفعلية (التعديل الجديد) ==============
+        # ============== حساب الإجازات والتأخيرات المبررة (التعديل الجديد) ==============
         
         print(f"📋 Approved leaves found: {len(leaves)}")
         for i, leave in enumerate(leaves, 1):
             print(f"   {i}. ID: {leave.id}, Type: {leave.type}, Classification: {leave.classification}")
             print(f"      Start: {leave.start_date}, End: {leave.end_date}, Hours: {leave.hours_requested}")
 
-        # حساب الإجازات المأخوذة لكل تصنيف
+        # حساب الإجازات المأخوذة لكل تصنيف (بما في ذلك التأخيرات المبررة)
         leave_hours_taken = {"normal": 0, "emergency": 0, "sick": 0}
         leave_types_breakdown = {}
 
+        # أولاً: حساب الإجازات العادية من طلبات الإجازة
         for leave in leaves:
             classification = leave.classification or "normal"
             if classification not in leave_hours_taken:
@@ -3322,6 +3344,12 @@ def employee_statistics():
                         leave_types_breakdown[leave.type] = hours_in_period
                     
                     print(f"   📅 Multi-day leave: {days_in_period} days ({hours_in_period} hours) added")
+
+        # ثانياً: إضافة التأخيرات المبررة كإجازات عادية (التعديل الجديد)
+        leave_hours_taken["normal"] += total_justified_delay_hours
+        if total_justified_delay_hours > 0:
+            leave_types_breakdown["delay"] = total_justified_delay_hours
+            print(f"   ⏰ Justified delays: {total_justified_delay_hours:.2f} hours added to normal leave")
         
         regular_leave_hours = employee.regular_leave_hours or 0
         normal_leave_taken = leave_hours_taken.get("normal", 0)
@@ -3721,6 +3749,8 @@ def employee_statistics():
                 "holidays_additional_hours": round(holidays_additional / 60, 2),
                 "total_additional_minutes": total_additional_attendance_minutes,
                 "total_additional_hours": round(total_additional_attendance_minutes / 60, 2),
+                "justified_delay_hours": round(total_justified_delay_hours, 2),  # إضافة جديدة
+                "justified_delay_minutes": int(total_justified_delay_hours * 60)  # إضافة جديدة
             },
             "leaves_info": {
                 "leaves_taken_hours": {
@@ -3737,7 +3767,9 @@ def employee_statistics():
                 "leave_balance_hours": leave_balance_hours,
                 "leave_balance_days": leave_balance_days,
                 "remaining_leave_hours": remaining_leave_hours,
-                "remaining_leave_days": remaining_leave_days
+                "remaining_leave_days": remaining_leave_days,
+                "justified_delays_count": len(justified_delays),  # إضافة جديدة
+                "justified_delays_hours": total_justified_delay_hours  # إضافة جديدة
             },
             "salary_info": salary_info,
             "compensation_records": compensation_records,
@@ -3750,6 +3782,7 @@ def employee_statistics():
         print(f"   Total work hours: {result['time_stats']['total_work_hours']}")
         print(f"   Leave hours taken: {result['leaves_info']['leaves_taken_hours']}")
         print(f"   Leave days taken: {result['leaves_info']['leaves_taken_days']}")
+        print(f"   Justified delays: {result['leaves_info']['justified_delays_hours']} hours")
         print(f"   Net salary: {result['salary_info'].get('net_salary', 'N/A')}")
         
         return jsonify(result)
@@ -8058,6 +8091,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
