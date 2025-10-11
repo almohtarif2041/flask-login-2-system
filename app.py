@@ -6590,10 +6590,14 @@ def get_supervisor_dashboard_data():
         department_name = supervisor.department.dep_name
 
         # تاريخ ووقت ثابت للاختبار (يمكن تغييره للاستخدام الحقيقي)
-        today = date.today()
-        test_time = datetime.now().time()
-        current_time = test_time
-        print(f"التاريخ: {today}, الوقت الحالي: {current_time}")
+        # الحصول على التاريخ والوقت الحالي وفق توقيت سوريا
+        damascus_tz = pytz.timezone('Asia/Damascus')
+        damascus_now = datetime.now(damascus_tz)
+        
+        today = damascus_now.date()
+        current_time = damascus_now.time()
+        
+        print(f"التاريخ: {today}, الوقت الحالي (سوريا): {current_time}")
 
         # جلب جميع الموظفين في قسم المشرف فقط
         all_employees = db.session.query(Employee, Department)\
@@ -8091,6 +8095,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
