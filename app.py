@@ -433,6 +433,7 @@ import pytz
 
 # مفتاح سري للـ cron endpoint
 CRON_SECRET_KEY = os.environ.get('CRON_SECRET_KEY', 'temporary-key-change-later')
+
 @app.route('/cron/daily-leave-check', methods=['GET', 'POST'])
 def cron_daily_leave_check():
     """
@@ -528,11 +529,17 @@ def cron_daily_leave_check():
             'error': str(e)
         }), 500
 
-def check_employee_leave_status(employee, today):
+def check_employee_leave_status(employee, today, current_time=None):
     """
     التحقق من وجود إجازات معتمدة للموظف في اليوم المحدد
     """
     try:
+        damascus_tz = pytz.timezone('Asia/Damascus')
+        if current_time is None:
+            current_time = datetime.now(damascus_tz)
+        
+        current_time_only = current_time.time()
+        
         # البحث عن طلبات الإجازة المعتمدة التي تشمل اليوم المطلوب
         approved_leaves = LeaveRequest.query.filter_by(
             employee_id=employee.id,
@@ -555,9 +562,15 @@ def check_employee_leave_status(employee, today):
                 elif leave.type == 'multi-day' and leave.start_date <= today <= leave.end_date:
                     return 'on'
                 
-                # إذا كانت إجازة ساعية في اليوم الحالي
+                # إذا كانت إجازة ساعية في اليوم الحالي - نتحقق من الوقت
                 elif leave.type == 'hourly' and leave.start_date == today:
-                    return 'on'
+                    if leave.start_time and leave.end_time:
+                        # إذا كان الوقت الحالي يقع ضمن فترة الإجازة الساعية
+                        if leave.start_time <= current_time_only <= leave.end_time:
+                            return 'on'
+                    else:
+                        # إذا لم يكن هناك وقت محدد، تعتبر الإجازة طوال اليوم
+                        return 'on'
         
         return 'off'
         
@@ -594,6 +607,98 @@ def check_weekly_day_off_status(employee, today, timezone):
     except Exception as e:
         print(f"❌ خطأ في التحقق من العطلة الأسبوعية للموظف {employee.id}: {str(e)}")
         return 'off'
+def calculate_leave_hours(attendance_record, hourly_leave):
+    """
+    حساب ساعات الإجازة المستخدمة
+    """
+    try:
+        # حساب الوقت الفعلي للإجازة
+        leave_start = datetime.combine(attendance_record.work_date, hourly_leave.start_time)
+        leave_end = datetime.combine(attendance_record.work_date, hourly_leave.end_time)
+        leave_duration = (leave_end - leave_start).total_seconds() / 3600  # بالساعات
+        
+        return leave_duration
+        
+    except Exception as e:
+        print(f"❌ خطأ في حساب ساعات الإجازة: {str(e)}")
+        return 0
+@app.route('/cron/hourly-leave-sync', methods=['GET', 'POST'])
+def cron_hourly_leave_sync():
+    """
+    كرون مخصص للإجازات الساعية - يعمل كل 5 دقائق
+    """
+    # التحقق من المفتاح السري
+    provided_key = request.args.get('key') or request.headers.get('X-Cron-Key')
+    
+    if provided_key != CRON_SECRET_KEY:
+        return jsonify({'error': 'Unauthorized', 'message': 'مفتاح غير صحيح'}), 401
+    
+    try:
+        damascus_tz = pytz.timezone('Asia/Damascus')
+        current_time = datetime.now(damascus_tz)
+        today = current_time.date()
+        current_time_only = current_time.time()
+        
+        processed_count = 0
+        employees_updated = []
+        
+        # جلب جميع الموظفين
+        all_employees = Employee.query.all()
+        
+        print(f"🕒 مزامنة الإجازات الساعية لـ {len(all_employees)} موظف...")
+        
+        for employee in all_employees:
+            try:
+                current_status = employee.is_leave
+                
+                # التحقق من الإجازات الساعية فقط
+                hourly_leaves = LeaveRequest.query.filter(
+                    LeaveRequest.employee_id == employee.id,
+                    LeaveRequest.status == 'approved',
+                    LeaveRequest.type == 'hourly',
+                    LeaveRequest.start_date == today
+                ).all()
+                
+                new_status = 'off'
+                
+                # إذا كان هناك إجازات ساعية، نتحقق من الوقت
+                for leave in hourly_leaves:
+                    if leave.start_time and leave.end_time:
+                        if leave.start_time <= current_time_only <= leave.end_time:
+                            new_status = 'on'
+                            break
+                
+                # تحديث الحالة إذا اختلفت
+                if current_status != new_status:
+                    employee.is_leave = new_status
+                    processed_count += 1
+                    employees_updated.append({
+                        'id': employee.id,
+                        'name': employee.full_name_arabic,
+                        'previous_status': current_status,
+                        'new_status': new_status,
+                        'time': current_time.strftime('%H:%M')
+                    })
+                    print(f"✓ تحديث إجازة ساعية: {employee.full_name_arabic} → {new_status}")
+                    
+            except Exception as e:
+                print(f"❌ خطأ في معالجة الموظف {employee.id}: {str(e)}")
+                continue
+        
+        if processed_count > 0:
+            db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'updated': processed_count,
+            'employees_updated': employees_updated,
+            'timestamp': current_time.isoformat(),
+            'message': f'✓ تم تحديث {processed_count} موظف للإجازات الساعية'
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ خطأ في كرون الإجازات الساعية: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 @app.route('/cron/auto-checkout', methods=['GET', 'POST'])
 def cron_auto_checkout():
     """
@@ -4804,6 +4909,7 @@ def handle_attendance():
         damascus_tz = pytz.timezone('Asia/Damascus')
         current_time = datetime.now(damascus_tz)
         today = current_time.date()
+        current_time_only = current_time.time()
 
         if not employee:
             return jsonify({
@@ -4907,6 +5013,23 @@ def handle_attendance():
 
             existing_record.check_out_time = current_time
             
+            # ✅ التحقق من الإجازات الساعية قبل تسجيل الخروج
+            active_hourly_leave = LeaveRequest.query.filter(
+                LeaveRequest.employee_id == employee_id,
+                LeaveRequest.status == 'approved',
+                LeaveRequest.type == 'hourly',
+                LeaveRequest.start_date == today,
+                LeaveRequest.start_time <= current_time_only,
+                LeaveRequest.end_time >= current_time_only
+            ).first()
+
+            # إذا كان في إجازة ساعية، جعل الخروج مبرراً
+            if active_hourly_leave:
+                leave_hours = calculate_leave_hours(existing_record, active_hourly_leave)
+                existing_record.leave_hours = leave_hours
+                existing_record.status = 'justified'
+                print(f"✅ خروج مبرر - إجازة ساعية: {employee.full_name_arabic}")
+            
             if existing_record.check_in_time:
                 # ✅ إصلاح: تأكد من أن كلا الوقتين بنفس المنطقة الزمنية
                 check_in = existing_record.check_in_time
@@ -4979,7 +5102,8 @@ def handle_attendance():
             return jsonify({
                 'success': True,
                 'message': 'تم تسجيل الانصراف بنجاح',
-                'operation_type': 'check_out'
+                'operation_type': 'check_out',
+                'leave_justified': bool(active_hourly_leave)
             })
             
     except Exception as e:
@@ -5489,6 +5613,32 @@ def create_leave_request():
                 print(f"تم تحديث رصيد الإجازة الخاصة - المستخدم: {employee.emergency_leave_used}, المتبقي: {employee.emergency_leave_remaining}")
             print("تم خصم الرصيد")
 
+            # ✅ التحديث الفوري لحالة is_leave فقط إذا كان تاريخ البدء هو اليوم الحالي
+            damascus_tz = pytz.timezone('Asia/Damascus')
+            current_time = datetime.now(damascus_tz)
+            today = current_time.date()
+            current_time_only = current_time.time()
+            
+            if start_date == today:
+                if data['type'] == 'hourly':
+                    # للإجازات الساعية: نتحقق إذا كانت سارية الآن
+                    start_time = datetime.strptime(data['start_time'], '%H:%M').time()
+                    end_time = datetime.strptime(data['end_time'], '%H:%M').time()
+                    
+                    if start_time <= current_time_only <= end_time:
+                        employee.is_leave = 'on'
+                        print(f"✅ تم تفعيل الإجازة الساعية فوراً للموظف {employee.full_name_arabic}")
+                    else:
+                        employee.is_leave = 'off'
+                        print(f"⏰ الإجازة الساعية ليست نشطة الآن، سيتم تفعيلها تلقائياً عند وقتها")
+                else:
+                    # للإجازات اليومية والمتعددة: تفعيل فوري
+                    employee.is_leave = 'on'
+                    print(f"✅ تم تفعيل الإجازة فوراً للموظف {employee.full_name_arabic}")
+            else:
+                employee.is_leave = 'off'
+                print(f"📅 الإجازة مخصصة لتاريخ مستقبلي، سيتم تفعيلها تلقائياً عند تاريخ البدء")
+
         medical_message = ""
         if classification == 'sick':
             medical_message = "يرجى أيضاً التواصل مع مسؤول قسم الموارد البشرية لعرض التقارير الطبية لحالتك، مع تمنياتنا لك بالسلامة.🩹"
@@ -5677,7 +5827,8 @@ def create_leave_request():
             "message": message,
             "request_id": new_request.id,
             "is_auto_approved": is_supervisor,
-            "hours_requested": hours_requested
+            "hours_requested": hours_requested,
+            "is_leave_activated": employee.is_leave
         }), 201
 
     except Exception as e:
@@ -7220,7 +7371,6 @@ def handle_supervisor_request(request_type, request_id, action):
     old_status = request_record.status
 
     # تحديث حالة الطلب
-# تحديث حالة الطلب
     if request_type == 'delay':
         if action == 'approve':
             request_record.status = 'Justified'
@@ -7274,10 +7424,63 @@ def handle_supervisor_request(request_type, request_id, action):
             # تقليل الرصيد المتبقي
             setattr(employee, remaining_attr, getattr(employee, remaining_attr, 0) - hours_requested)
             
+            # ✅ التحديث الفوري لحالة is_leave فقط إذا كان تاريخ البدء هو اليوم الحالي
+            damascus_tz = pytz.timezone('Asia/Damascus')
+            current_time = datetime.now(damascus_tz)
+            today = current_time.date()
+            current_time_only = current_time.time()
+            
+            if request_record.start_date == today:
+                if request_record.type == 'hourly':
+                    # للإجازات الساعية: نتحقق إذا كانت سارية الآن
+                    if (request_record.start_time and request_record.end_time and
+                        request_record.start_time <= current_time_only <= request_record.end_time):
+                        employee.is_leave = 'on'
+                        print(f"✅ تم تفعيل الإجازة الساعية فوراً للموظف {employee.full_name_arabic}")
+                    else:
+                        employee.is_leave = 'off'
+                        print(f"⏰ الإجازة الساعية ليست نشطة الآن، سيتم تفعيلها تلقائياً عند وقتها")
+                else:
+                    # للإجازات اليومية والمتعددة: تفعيل فوري
+                    employee.is_leave = 'on'
+                    print(f"✅ تم تفعيل الإجازة فوراً للموظف {employee.full_name_arabic}")
+            else:
+                employee.is_leave = 'off'
+                print(f"📅 الإجازة مخصصة لتاريخ مستقبلي، سيتم تفعيلها تلقائياً عند تاريخ البدء")
+            
         elif action == 'reject' and old_status == 'approved':
             # رفض طلب إجازة كان معتمداً سابقاً - نرجع الرصيد
             setattr(employee, used_attr, getattr(employee, used_attr, 0) - hours_requested)
             setattr(employee, remaining_attr, getattr(employee, remaining_attr, 0) + hours_requested)
+            
+            # ✅ التحديث الفوري لحالة is_leave فقط إذا كان تاريخ البدء هو اليوم الحالي
+            damascus_tz = pytz.timezone('Asia/Damascus')
+            current_time = datetime.now(damascus_tz)
+            today = current_time.date()
+            current_time_only = current_time.time()
+            
+            if request_record.start_date == today:
+                if request_record.type == 'hourly':
+                    # للإجازات الساعية: نبحث عن إجازات ساعية أخرى قد تكون نشطة
+                    active_hourly_leaves = LeaveRequest.query.filter(
+                        LeaveRequest.employee_id == employee.id,
+                        LeaveRequest.status == 'approved',
+                        LeaveRequest.type == 'hourly',
+                        LeaveRequest.start_date == today,
+                        LeaveRequest.start_time <= current_time_only,
+                        LeaveRequest.end_time >= current_time_only
+                    ).filter(LeaveRequest.id != request_record.id).first()
+                    
+                    employee.is_leave = 'on' if active_hourly_leaves else 'off'
+                    print(f"🔄 تحديث حالة الإجازة بعد الرفض: {employee.is_leave}")
+                else:
+                    # للإجازات اليومية والمتعددة: إلغاء فوري
+                    employee.is_leave = 'off'
+                    print(f"❌ تم إلغاء تفعيل الإجازة للموظف {employee.full_name_arabic}")
+            else:
+                # إذا كان تاريخ البدء في المستقبل، فلا داعي لتحديث is_leave
+                print(f"📅 الإجازة المرفوضة كانت مستقبلية، لا حاجة لتحديث is_leave")
+    
     if request_type == 'compensation':
         if action == 'approve' and old_status != 'approved':
             hours_requested = request_record.hours_requested if request_record.hours_requested else 0
@@ -7290,6 +7493,7 @@ def handle_supervisor_request(request_type, request_id, action):
             # إلغاء الزيادة في حالة رفض طلب معتمد سابقاً
             employee.regular_leave_remaining -= hours_requested
             employee.regular_leave_used += hours_requested
+    
     if request_type == 'overtime' and action == 'approve':
         overtime_hours = request_record.add_attendance_minutes / 60
         # employee.overtime_balance += overtime_hours
@@ -7637,7 +7841,8 @@ def handle_supervisor_request(request_type, request_id, action):
 
     return jsonify({
         "success": True,
-        "message": f"تم {'الموافقة على' if action=='approve' else 'رفض'} الطلب بنجاح"
+        "message": f"تم {'الموافقة على' if action=='approve' else 'رفض'} الطلب بنجاح",
+        "is_leave_updated": employee.is_leave
     }), 200
 @app.route('/api/sp-overtime-requests/<int:request_id>/time', methods=['PUT'])
 def update_overtime_time(request_id):
@@ -8104,6 +8309,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
