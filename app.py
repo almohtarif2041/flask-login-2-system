@@ -3664,6 +3664,14 @@ def employee_statistics():
         salary_info = {}
         
         if salary_component:
+            # ============== التعديل: حساب إجمالي الساعات المدفوعة ==============
+            total_paid_hours = total_work_hours + total_leave_hours
+            
+            print(f"💰 Paid hours calculation:")
+            print(f"   Actual work hours: {total_work_hours}")
+            print(f"   Approved leave hours: {total_leave_hours}")
+            print(f"   Total paid hours: {total_paid_hours}")
+
             # 1. قراءة القيم الأساسية من salary_component
             base_salary = salary_component.base_salary or 0
             hour_salary = salary_component.hour_salary or 0
@@ -3690,12 +3698,12 @@ def employee_statistics():
             print(f"5) Internet Allowance: {internet_allowance}")
             print(f"6) Transport Allowance: {transport_allowance}")
             print(f"7) Depreciation Allowance: {depreciation_allowance}")
-            print(f"7) administrative_allowance: {administrative_allowance}")
+            print(f"8) Administrative Allowance: {administrative_allowance}")
             
             # 3. قراءة الاستقطاعات
             daily_administrative_deduction = salary_component.administrative_deduction or 0
             administrative_deduction = daily_administrative_deduction * present_days
-            print(f"8) administrative Deduction: {administrative_deduction}")
+            print(f"9) Administrative Deduction: {administrative_deduction}")
             
             holiday_overtime_rate_dec = Decimal(str(holiday_overtime_rate))
             overtime_rate_dec = Decimal(str(overtime_rate))
@@ -3706,15 +3714,15 @@ def employee_statistics():
             administrative_deduction_dec = Decimal(str(administrative_deduction))
             regular_overtime_hours = Decimal(str(regular_days_additional / 60))
             holiday_overtime_hours = Decimal(str(holidays_additional / 60))
-            total_work_hours_dec = Decimal(str(total_work_hours))
+            total_paid_hours_dec = Decimal(str(total_paid_hours))  # استخدام الساعات المدفوعة بدلاً من ساعات العمل فقط
 
-            print(f"10) Actual Work Hours: {total_work_hours_dec} hours")
+            print(f"10) Total Paid Hours: {total_paid_hours_dec} hours")
             print(f"11) Regular Overtime Hours: {regular_overtime_hours} hours")
-            print(f"12) holiday Attendance Hours: {holiday_overtime_hours} hours")
+            print(f"12) Holiday Attendance Hours: {holiday_overtime_hours} hours")
 
-            # 6. حساب الراتب الأساسي المكتسب
-            actual_salary_earned = total_work_hours_dec * hour_salary
-            print(f"13) Actual Salary Earned = Work Hours × Hourly Wage = {total_work_hours_dec} × {hour_salary} = {actual_salary_earned}")
+            # 6. حساب الراتب الأساسي المكتسب (باستخدام الساعات المدفوعة)
+            actual_salary_earned = total_paid_hours_dec * hour_salary
+            print(f"13) Actual Salary Earned = Total Paid Hours × Hourly Wage = {total_paid_hours_dec} × {hour_salary} = {actual_salary_earned}")
 
             # 7. حساب أجر الوقت الإضافي العادي
             regular_overtime_pay = regular_overtime_hours * hour_salary * overtime_rate_dec
@@ -3722,11 +3730,11 @@ def employee_statistics():
 
             # 8. حساب أجر الحضور الإضافي في ايام العطل
             holiday_overtime_pay = holiday_overtime_hours * hour_salary * holiday_overtime_rate_dec
-            print(f"15) holiday Overtime Pay = Approved Extra Hours × Hourly Wage × Overtime Rate = {holiday_overtime_hours} × {hour_salary} × {holiday_overtime_rate_dec} = {holiday_overtime_pay}")
+            print(f"15) Holiday Overtime Pay = Approved Extra Hours × Hourly Wage × Overtime Rate = {holiday_overtime_hours} × {hour_salary} × {holiday_overtime_rate_dec} = {holiday_overtime_pay}")
 
             # 9. حساب إجمالي البدلات
             total_allowances = internet_allowance_dec + transport_allowance_dec + depreciation_allowance_dec + administrative_allowance_dec
-            print(f"16) Total Allowances = Internet + Transport + Depreciation + Others = {internet_allowance_dec} + {transport_allowance_dec} + {depreciation_allowance_dec}+ {administrative_allowance_dec}= {total_allowances}")
+            print(f"16) Total Allowances = Internet + Transport + Depreciation + Administrative = {internet_allowance_dec} + {transport_allowance_dec} + {depreciation_allowance_dec} + {administrative_allowance_dec} = {total_allowances}")
 
             # 10. حساب إجمالي الاستقطاعات
             total_deductions = administrative_deduction_dec
@@ -3734,7 +3742,7 @@ def employee_statistics():
 
             # 11. حساب الراتب الإجمالي
             gross_salary = actual_salary_earned + regular_overtime_pay + holiday_overtime_pay + total_allowances
-            print(f"18) Gross Salary = Actual Salary + Regular Overtime Pay + Additional Overtime Pay + Total Allowances = {actual_salary_earned} + {regular_overtime_pay} + {holiday_overtime_pay} + {total_allowances} = {gross_salary}")
+            print(f"18) Gross Salary = Actual Salary + Regular Overtime Pay + Holiday Overtime Pay + Total Allowances = {actual_salary_earned} + {regular_overtime_pay} + {holiday_overtime_pay} + {total_allowances} = {gross_salary}")
 
             # 12. حساب صافي الراتب بعد الاستقطاعات
             net_salary = gross_salary - total_deductions
@@ -3746,6 +3754,8 @@ def employee_statistics():
                 "overtime_rate": overtime_rate,
                 "holiday_overtime_rate": holiday_overtime_rate,
                 "actual_work_hours": total_work_hours,
+                "approved_leave_hours": total_leave_hours,  # إضافة ساعات الإجازات
+                "total_paid_hours": round(total_paid_hours, 2),  # إضافة إجمالي الساعات المدفوعة
                 "actual_salary_earned": round(actual_salary_earned, 2),
                 "regular_overtime_hours": round(regular_overtime_hours, 2),
                 "regular_overtime_pay": round(regular_overtime_pay, 2),
@@ -3768,10 +3778,12 @@ def employee_statistics():
             
             print(f"💰 Salary calculation:")
             print(f"   Actual work hours: {total_work_hours}")
+            print(f"   Approved leave hours: {total_leave_hours}")
+            print(f"   Total paid hours: {total_paid_hours}")
             print(f"   Hour salary: {hour_salary}")
             print(f"   Actual salary earned: {actual_salary_earned}")
             print(f"   Regular overtime hours: {regular_overtime_hours}")
-            print(f"   holiday overtime hours: {holiday_overtime_hours}")
+            print(f"   Holiday overtime hours: {holiday_overtime_hours}")
             print(f"   Total allowances: {total_allowances}")
             print(f"   Total deductions: {total_deductions}")
             print(f"   Gross salary: {gross_salary}")
@@ -3844,6 +3856,8 @@ def employee_statistics():
                 "total_unjustified_delay_minutes": total_unjustified_delay,
                 "total_unjustified_delay_hours": round(total_unjustified_delay / 60, 2),
                 "total_work_hours": round(total_work_hours, 2),
+                "total_leave_hours": round(total_leave_hours, 2),  # إضافة جديدة
+                "total_paid_hours": round(total_paid_hours, 2) if salary_component else 0,  # إضافة جديدة
                 "delays_count": delay_count,
                 "total_delay_minutes": total_delay_minutes,
                 "overtime_minutes": total_overtime_minutes,
@@ -3854,8 +3868,8 @@ def employee_statistics():
                 "holidays_additional_hours": round(holidays_additional / 60, 2),
                 "total_additional_minutes": total_additional_attendance_minutes,
                 "total_additional_hours": round(total_additional_attendance_minutes / 60, 2),
-                "justified_delay_hours": round(total_justified_delay_hours, 2),  # إضافة جديدة
-                "justified_delay_minutes": int(total_justified_delay_hours * 60)  # إضافة جديدة
+                "justified_delay_hours": round(total_justified_delay_hours, 2),
+                "justified_delay_minutes": int(total_justified_delay_hours * 60)
             },
             "leaves_info": {
                 "leaves_taken_hours": {
@@ -3873,8 +3887,8 @@ def employee_statistics():
                 "leave_balance_days": leave_balance_days,
                 "remaining_leave_hours": remaining_leave_hours,
                 "remaining_leave_days": remaining_leave_days,
-                "justified_delays_count": len(justified_delays),  # إضافة جديدة
-                "justified_delays_hours": total_justified_delay_hours  # إضافة جديدة
+                "justified_delays_count": len(justified_delays),
+                "justified_delays_hours": total_justified_delay_hours
             },
             "salary_info": salary_info,
             "compensation_records": compensation_records,
@@ -3885,6 +3899,8 @@ def employee_statistics():
         print(f"📤 Final result:")
         print(f"   Present days: {result['attendance_stats']['present_days']}")
         print(f"   Total work hours: {result['time_stats']['total_work_hours']}")
+        print(f"   Total leave hours: {result['time_stats']['total_leave_hours']}")
+        print(f"   Total paid hours: {result['time_stats']['total_paid_hours']}")
         print(f"   Leave hours taken: {result['leaves_info']['leaves_taken_hours']}")
         print(f"   Leave days taken: {result['leaves_info']['leaves_taken_days']}")
         print(f"   Justified delays: {result['leaves_info']['justified_delays_hours']} hours")
@@ -4954,51 +4970,59 @@ def handle_attendance():
             db.session.add(new_record)
             db.session.commit()
 
-            # ✅ التعديل: التحقق مما إذا كان هناك تأخير سابق لهذا الموظف في نفس اليوم
-            existing_delay_today = WorkDelayArchive.query.filter(
-                WorkDelayArchive.employee_id == employee_id,
-                WorkDelayArchive.date == today
-            ).first()
+            # ✅ التعديل: التحقق مما إذا كان هذا هو أول دخول للموظف اليوم
+            all_records_today = AttendanceRecord.query.filter(
+                AttendanceRecord.employee_id == employee_id,
+                AttendanceRecord.work_date == today
+            ).all()
 
-            # ✅ إذا لم يكن هناك تأخير مسجل مسبقاً لهذا اليوم، نقوم بحساب التأخير
-            if not existing_delay_today:
-                # حساب وقت التأخير (15 دقيقة بدلاً من 16)
-                start_time = employee.work_start_time
-                actual_start = damascus_tz.localize(datetime.combine(today, start_time))
-                grace_period_end = actual_start + timedelta(minutes=16)  # فترة السماح 15 دقيقة
-                
-                # إذا دخل بعد فترة السماح (9:16 فما فوق)
-                if current_time > grace_period_end:
-                    delay_seconds = (current_time - grace_period_end).total_seconds()
-                    delay_minutes = int(delay_seconds // 60)
+            # ✅ إذا كان هذا هو أول سجل دخول اليوم فقط، نحسب التأخير
+            if len(all_records_today) == 1:
+                # ✅ التعديل: التحقق مما إذا كان هناك تأخير سابق لهذا الموظف في نفس اليوم
+                existing_delay_today = WorkDelayArchive.query.filter(
+                    WorkDelayArchive.employee_id == employee_id,
+                    WorkDelayArchive.date == today
+                ).first()
+
+                # ✅ إذا لم يكن هناك تأخير مسجل مسبقاً لهذا اليوم، نقوم بحساب التأخير
+                if not existing_delay_today:
+                    # حساب وقت التأخير (15 دقيقة بدلاً من 16)
+                    start_time = employee.work_start_time
+                    actual_start = damascus_tz.localize(datetime.combine(today, start_time))
+                    grace_period_end = actual_start + timedelta(minutes=16)  # فترة السماح 15 دقيقة
                     
-                    delay_record = WorkDelayArchive(
-                        employee_id=employee_id,
-                        supervisor_id=supervisor.supervisor_ID,
-                        date=today,
-                        minutes_delayed=delay_minutes,
-                        from_timestamp=grace_period_end,
-                        to_timestamp=current_time,
-                        status='Unjustified',
-                        delay_note=f'تأخير غير مبرر: {delay_minutes} دقيقة'
-                    )
-                    db.session.add(delay_record)
-                    db.session.commit()
-                    
-                    # إرسال إشعار للمشرف
-                    supervisor_employee = supervisor.employee
-                    if supervisor_employee and supervisor_employee.telegram_chatid:
-                        message = (
-                            f"🔔 <b>إشعار تأخير موظف</b>\n\n"
-                            f"• الموظف: <b>{employee.full_name_arabic}</b>\n"
-                            f"• القسم: <b>{department.dep_name if department else 'غير معروف'}</b>\n"
-                            f"• مدة التأخير: <b>{delay_minutes} دقيقة</b>\n"
-                            f"• وقت الدخول الفعلي: <b>{current_time.strftime('%Y-%m-%d %I:%M %p')}</b>\n"
-                            f"• فترة التأخير: من <b>{grace_period_end.strftime('%I:%M %p')}</b> "
-                            f"إلى <b>{current_time.strftime('%I:%M %p')}</b>\n"
-                            f"• ملاحظة: فترة السماح للدخول 15 دقيقة بعدها تصبح متأخر"
+                    # إذا دخل بعد فترة السماح (9:16 فما فوق)
+                    if current_time > grace_period_end:
+                        delay_seconds = (current_time - grace_period_end).total_seconds()
+                        delay_minutes = int(delay_seconds // 60)
+                        
+                        delay_record = WorkDelayArchive(
+                            employee_id=employee_id,
+                            supervisor_id=supervisor.supervisor_ID,
+                            date=today,
+                            minutes_delayed=delay_minutes,
+                            from_timestamp=grace_period_end,
+                            to_timestamp=current_time,
+                            status='Unjustified',
+                            delay_note=f'تأخير غير مبرر: {delay_minutes} دقيقة'
                         )
-                        send_telegram_message(supervisor_employee.telegram_chatid, message)
+                        db.session.add(delay_record)
+                        db.session.commit()
+                        
+                        # إرسال إشعار للمشرف
+                        supervisor_employee = supervisor.employee
+                        if supervisor_employee and supervisor_employee.telegram_chatid:
+                            message = (
+                                f"🔔 <b>إشعار تأخير موظف</b>\n\n"
+                                f"• الموظف: <b>{employee.full_name_arabic}</b>\n"
+                                f"• القسم: <b>{department.dep_name if department else 'غير معروف'}</b>\n"
+                                f"• مدة التأخير: <b>{delay_minutes} دقيقة</b>\n"
+                                f"• وقت الدخول الفعلي: <b>{current_time.strftime('%Y-%m-%d %I:%M %p')}</b>\n"
+                                f"• فترة التأخير: من <b>{grace_period_end.strftime('%I:%M %p')}</b> "
+                                f"إلى <b>{current_time.strftime('%I:%M %p')}</b>\n"
+                                f"• ملاحظة: فترة السماح للدخول 15 دقيقة بعدها تصبح متأخر"
+                            )
+                            send_telegram_message(supervisor_employee.telegram_chatid, message)
             # ✅ نهاية التعديل
             
             return jsonify({
@@ -8309,6 +8333,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
