@@ -4970,7 +4970,7 @@ def handle_attendance():
             db.session.add(new_record)
             db.session.commit()
 
-            # ✅ التعديل: التحقق مما إذا كان هذا هو أول دخول للموظف اليوم
+            # ✅ التحقق مما إذا كان هذا هو أول دخول للموظف اليوم
             all_records_today = AttendanceRecord.query.filter(
                 AttendanceRecord.employee_id == employee_id,
                 AttendanceRecord.work_date == today
@@ -4978,52 +4978,63 @@ def handle_attendance():
 
             # ✅ إذا كان هذا هو أول سجل دخول اليوم فقط، نحسب التأخير
             if len(all_records_today) == 1:
-                # ✅ التعديل: التحقق مما إذا كان هناك تأخير سابق لهذا الموظف في نفس اليوم
-                existing_delay_today = WorkDelayArchive.query.filter(
-                    WorkDelayArchive.employee_id == employee_id,
-                    WorkDelayArchive.date == today
+                # ✅ التحقق من وجود إجازة ساعية تغطي وقت الدخول الحالي
+                active_hourly_leave_at_checkin = LeaveRequest.query.filter(
+                    LeaveRequest.employee_id == employee_id,
+                    LeaveRequest.status == 'approved',
+                    LeaveRequest.type == 'hourly',
+                    LeaveRequest.start_date == today,
+                    LeaveRequest.start_time <= current_time_only,
+                    LeaveRequest.end_time >= current_time_only
                 ).first()
 
-                # ✅ إذا لم يكن هناك تأخير مسجل مسبقاً لهذا اليوم، نقوم بحساب التأخير
-                if not existing_delay_today:
-                    # حساب وقت التأخير (15 دقيقة بدلاً من 16)
-                    start_time = employee.work_start_time
-                    actual_start = damascus_tz.localize(datetime.combine(today, start_time))
-                    grace_period_end = actual_start + timedelta(minutes=16)  # فترة السماح 15 دقيقة
-                    
-                    # إذا دخل بعد فترة السماح (9:16 فما فوق)
-                    if current_time > grace_period_end:
-                        delay_seconds = (current_time - grace_period_end).total_seconds()
-                        delay_minutes = int(delay_seconds // 60)
+                # ✅ إذا لم يكن هناك إجازة ساعية تغطي وقت الدخول، نقوم بحساب التأخير
+                if not active_hourly_leave_at_checkin:
+                    # ✅ التحقق مما إذا كان هناك تأخير سابق لهذا الموظف في نفس اليوم
+                    existing_delay_today = WorkDelayArchive.query.filter(
+                        WorkDelayArchive.employee_id == employee_id,
+                        WorkDelayArchive.date == today
+                    ).first()
+
+                    # ✅ إذا لم يكن هناك تأخير مسجل مسبقاً لهذا اليوم، نقوم بحساب التأخير
+                    if not existing_delay_today:
+                        # حساب وقت التأخير (15 دقيقة بدلاً من 16)
+                        start_time = employee.work_start_time
+                        actual_start = damascus_tz.localize(datetime.combine(today, start_time))
+                        grace_period_end = actual_start + timedelta(minutes=16)  # فترة السماح 15 دقيقة
                         
-                        delay_record = WorkDelayArchive(
-                            employee_id=employee_id,
-                            supervisor_id=supervisor.supervisor_ID,
-                            date=today,
-                            minutes_delayed=delay_minutes,
-                            from_timestamp=grace_period_end,
-                            to_timestamp=current_time,
-                            status='Unjustified',
-                            delay_note=f'تأخير غير مبرر: {delay_minutes} دقيقة'
-                        )
-                        db.session.add(delay_record)
-                        db.session.commit()
-                        
-                        # إرسال إشعار للمشرف
-                        supervisor_employee = supervisor.employee
-                        if supervisor_employee and supervisor_employee.telegram_chatid:
-                            message = (
-                                f"🔔 <b>إشعار تأخير موظف</b>\n\n"
-                                f"• الموظف: <b>{employee.full_name_arabic}</b>\n"
-                                f"• القسم: <b>{department.dep_name if department else 'غير معروف'}</b>\n"
-                                f"• مدة التأخير: <b>{delay_minutes} دقيقة</b>\n"
-                                f"• وقت الدخول الفعلي: <b>{current_time.strftime('%Y-%m-%d %I:%M %p')}</b>\n"
-                                f"• فترة التأخير: من <b>{grace_period_end.strftime('%I:%M %p')}</b> "
-                                f"إلى <b>{current_time.strftime('%I:%M %p')}</b>\n"
-                                f"• ملاحظة: فترة السماح للدخول 15 دقيقة بعدها تصبح متأخر"
+                        # إذا دخل بعد فترة السماح (9:16 فما فوق)
+                        if current_time > grace_period_end:
+                            delay_seconds = (current_time - grace_period_end).total_seconds()
+                            delay_minutes = int(delay_seconds // 60)
+                            
+                            delay_record = WorkDelayArchive(
+                                employee_id=employee_id,
+                                supervisor_id=supervisor.supervisor_ID,
+                                date=today,
+                                minutes_delayed=delay_minutes,
+                                from_timestamp=grace_period_end,
+                                to_timestamp=current_time,
+                                status='Unjustified',
+                                delay_note=f'تأخير غير مبرر: {delay_minutes} دقيقة'
                             )
-                            send_telegram_message(supervisor_employee.telegram_chatid, message)
-            # ✅ نهاية التعديل
+                            db.session.add(delay_record)
+                            db.session.commit()
+                            
+                            # إرسال إشعار للمشرف
+                            supervisor_employee = supervisor.employee
+                            if supervisor_employee and supervisor_employee.telegram_chatid:
+                                message = (
+                                    f"🔔 <b>إشعار تأخير موظف</b>\n\n"
+                                    f"• الموظف: <b>{employee.full_name_arabic}</b>\n"
+                                    f"• القسم: <b>{department.dep_name if department else 'غير معروف'}</b>\n"
+                                    f"• مدة التأخير: <b>{delay_minutes} دقيقة</b>\n"
+                                    f"• وقت الدخول الفعلي: <b>{current_time.strftime('%Y-%m-%d %I:%M %p')}</b>\n"
+                                    f"• فترة التأخير: من <b>{grace_period_end.strftime('%I:%M %p')}</b> "
+                                    f"إلى <b>{current_time.strftime('%I:%M %p')}</b>\n"
+                                    f"• ملاحظة: فترة السماح للدخول 15 دقيقة بعدها تصبح متأخر"
+                                )
+                                send_telegram_message(supervisor_employee.telegram_chatid, message)
             
             return jsonify({
                 'success': True,
@@ -8333,6 +8344,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
