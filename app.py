@@ -4454,9 +4454,9 @@ def get_dashboard_data():
     try:
         if 'employee' not in session or session['employee'].get('role') != 'ادمن':
             return jsonify({"error": "غير مصرح لك بالوصول"}), 403
+        
         current_datetime = datetime.now(ZoneInfo("Asia/Damascus"))
         today = current_datetime.date()
-        # للاختبار: استخدام وقت ثابت (الساعة 6 مساءً)
         current_time = current_datetime.time()
         print(f"التاريخ: {today}, الوقت الحالي: {current_time}")
 
@@ -4467,18 +4467,41 @@ def get_dashboard_data():
             .filter(Employee.role != 'ادمن')\
             .all()
 
-        # جلب جميع سجلات الحضور لليوم مرتبة حسب الوقت
+        # جلب جميع سجلات الحضور لليوم مرتبة حسب الوقت (تصاعدي للحصول على أول دخول)
         today_attendance = db.session.query(AttendanceRecord)\
             .filter(AttendanceRecord.work_date == today)\
-            .order_by(AttendanceRecord.check_in_time.desc())\
+            .order_by(AttendanceRecord.check_in_time.asc())\
             .all()
 
-        # بناء قاموس لآخر سجل لكل موظف (أحدث سجل)
+        # جلب جميع الإجازات الساعية المعتمدة لليوم
+        hourly_leaves_today = db.session.query(LeaveRequest)\
+            .filter(
+                LeaveRequest.start_date == today,
+                LeaveRequest.status == 'approved',
+                LeaveRequest.type == 'hourly'
+            )\
+            .all()
+
+        # بناء قاموس لآخر سجل لكل موظف (أحدث سجل) - للعرض
         attendance_dict = {}
         for record in today_attendance:
             emp_id = int(record.employee_id)
-            if emp_id not in attendance_dict:
-                attendance_dict[emp_id] = record  # أول سجل يكون الأحدث لأنه مرتب desc
+            attendance_dict[emp_id] = record  # آخر سجل يكون الأحدث
+
+        # ✅ بناء قاموس لأول سجل دخول لكل موظف - لحساب التأخير
+        first_checkin_dict = {}
+        for record in today_attendance:
+            emp_id = int(record.employee_id)
+            if emp_id not in first_checkin_dict:
+                first_checkin_dict[emp_id] = record  # أول سجل دخول
+
+        # بناء قاموس للإجازات الساعية لكل موظف
+        hourly_leave_dict = {}
+        for leave in hourly_leaves_today:
+            emp_id = leave.employee_id
+            if emp_id not in hourly_leave_dict:
+                hourly_leave_dict[emp_id] = []
+            hourly_leave_dict[emp_id].append(leave)
 
         attendances = []
         delays = []
@@ -4504,39 +4527,65 @@ def get_dashboard_data():
             print(f"وقت العمل: {employee.work_start_time} - {employee.work_end_time}")
             print(f"في إجازة مبررة: {is_excused}")
 
-            # معالجة آخر سجل للموظف
-            if employee.id in attendance_dict:
-                last_record = attendance_dict[employee.id]
+            # التحقق من وجود إجازات ساعية للموظف
+            employee_hourly_leaves = hourly_leave_dict.get(employee.id, [])
+            print(f"عدد الإجازات الساعية: {len(employee_hourly_leaves)}")
+
+            # ✅ الحصول على أول سجل دخول لحساب التأخير
+            first_record = first_checkin_dict.get(employee.id)
+            # الحصول على آخر سجل للعرض العام
+            last_record = attendance_dict.get(employee.id)
+
+            # ✅ متغير لتحديد إذا كان متأخرًا في أول دخول
+            is_delayed_in_first_checkin = False
+            delay_minutes = 0
+
+            # ✅ حساب التأخير من أول دخول فقط
+            if first_record and first_record.check_in_time:
+                first_check_in_time = first_record.check_in_time.time()
+                
+                work_start_minutes = time_to_minutes(employee.work_start_time)
+                first_checkin_minutes = time_to_minutes(first_check_in_time)
+                
+                # حساب التأخير من أول دخول
+                first_delay_minutes = first_checkin_minutes - work_start_minutes
+                
+                # ✅ التحقق من وجود إجازة ساعية تغطي وقت الدخول الأول
+                has_hourly_leave_at_first_checkin = False
+                for leave in employee_hourly_leaves:
+                    leave_start_minutes = time_to_minutes(leave.start_time)
+                    leave_end_minutes = time_to_minutes(leave.end_time)
+                    
+                    if leave_start_minutes <= first_checkin_minutes <= leave_end_minutes:
+                        has_hourly_leave_at_first_checkin = True
+                        print(f"✅ لديه إجازة ساعية تغطي وقت الدخول الأول: {leave.start_time} - {leave.end_time}")
+                        break
+                
+                # ✅ تحديد إذا كان متأخرًا في أول دخول (فقط إذا لم يكن لديه إجازة ساعية)
+                if first_checkin_minutes <= time_to_minutes(employee.work_end_time):
+                    is_delayed_in_first_checkin = (first_delay_minutes > 15) and not has_hourly_leave_at_first_checkin
+                    delay_minutes = first_delay_minutes if is_delayed_in_first_checkin else 0
+                
+                print(f"✅ أول دخول: {first_check_in_time} - تأخير: {first_delay_minutes} دقيقة - متأخر: {is_delayed_in_first_checkin}")
+
+            # معالجة آخر سجل للموظف للعرض
+            if last_record:
                 print(f"آخر سجل - دخول: {last_record.check_in_time}, خروج: {last_record.check_out_time}")
                 
-                # التحقق من وجود تسجيل دخول في آخر سجل
                 if last_record.check_in_time:
                     last_check_in_time = last_record.check_in_time.time()
                     last_check_out_time = last_record.check_out_time.time() if last_record.check_out_time else None
                     
                     employee_data['check_in_time'] = last_check_in_time.strftime('%I:%M %p')
                     
-                    # حساب التأخير بناءً على آخر دخول
                     work_start_minutes = time_to_minutes(employee.work_start_time)
                     work_end_minutes = time_to_minutes(employee.work_end_time)
-                    checkin_minutes = time_to_minutes(last_check_in_time)
                     current_minutes = time_to_minutes(current_time)
                     
-                    # حساب التأخير
-                    delay_minutes = checkin_minutes - work_start_minutes
-                    
-                    # إذا كان وقت الحضور بعد نهاية الدوام (work_end_minutes)
-                    if checkin_minutes > work_end_minutes:
-                        is_delayed = False  # حضور عادي، ليس متأخر
-                    else:
-                        # إذا كان الحضور ضمن الدوام وتأخر 15 دقيقة أو أكثر
-                        is_delayed = delay_minutes > 15
-                    
                     # هل آخر دخول ضمن أوقات الدوام؟
-                    is_checkin_during_work = work_start_minutes <= checkin_minutes <= work_end_minutes
+                    is_checkin_during_work = work_start_minutes <= time_to_minutes(last_check_in_time) <= work_end_minutes
                     
-                    print(f"تأخير: {delay_minutes} دقيقة - متأخر 15+ دقيقة: {is_delayed}")
-                    print(f"دخول ضمن أوقات الدوام: {is_checkin_during_work}")
+                    print(f"آخر دخول ضمن أوقات الدوام: {is_checkin_during_work}")
                     
                     # معالجة الحالات
                     if last_check_out_time:
@@ -4544,6 +4593,17 @@ def get_dashboard_data():
                         employee_data['check_out_time'] = last_check_out_time.strftime('%I:%M %p')
                         
                         checkout_minutes = time_to_minutes(last_check_out_time)
+                        
+                        # ✅ التحقق من وجود إجازة ساعية تغطي وقت الخروج
+                        has_hourly_leave_at_checkout = False
+                        for leave in employee_hourly_leaves:
+                            leave_start_minutes = time_to_minutes(leave.start_time)
+                            leave_end_minutes = time_to_minutes(leave.end_time)
+                            
+                            if leave_start_minutes <= checkout_minutes <= leave_end_minutes:
+                                has_hourly_leave_at_checkout = True
+                                print(f"✅ لديه إجازة ساعية تغطي وقت الخروج: {leave.start_time} - {leave.end_time}")
+                                break
                         
                         # منطقة المسامحة (5 دقائق قبل انتهاء الدوام)
                         grace_period_start = work_end_minutes - 5
@@ -4555,8 +4615,9 @@ def get_dashboard_data():
                         print(f"وقت الخروج: {last_check_out_time}")
                         print(f"خروج ضمن الدوام (قبل المسامحة): {is_checkout_during_work}")
                         print(f"خروج في المسامحة أو بعدها: {is_checkout_in_grace_or_after}")
+                        print(f"لديه إجازة ساعية عند الخروج: {has_hourly_leave_at_checkout}")
                         
-                        if is_checkout_during_work:
+                        if is_checkout_during_work and not has_hourly_leave_at_checkout:
                             if is_leave_excused:
                                 employee_data['absence_type'] = 'مبرر'
                                 print("النتيجة: غياب مبرر (لديه إذن + خروج مبكر)")
@@ -4564,7 +4625,8 @@ def get_dashboard_data():
                                 employee_data['absence_type'] = 'غير مبرر'
                                 print("النتيجة: غياب غير مبرر (خروج مبكر)")
                             
-                            if is_delayed:
+                            # ✅ استخدام تأخير أول دخول فقط
+                            if is_delayed_in_first_checkin:
                                 employee_data['delay_minutes'] = delay_minutes
                             
                             # حساب الخروج المبكر
@@ -4572,19 +4634,20 @@ def get_dashboard_data():
                             employee_data['early_departure_minutes'] = early_departure
                             absences.append(employee_data)
                             
-                        elif is_checkout_in_grace_or_after:
-                            # خرج في منطقة المسامحة أو بعدها
-                            if is_checkout_in_grace_or_after and checkout_minutes <= work_end_minutes + 60:
-                                # خرج في المسامحة أو خلال ساعة بعد الدوام = غياب مبرر
+                        elif is_checkout_in_grace_or_after or has_hourly_leave_at_checkout:
+                            # خرج في منطقة المسامحة أو بعدها أو لديه إجازة ساعية
+                            if (is_checkout_in_grace_or_after and checkout_minutes <= work_end_minutes + 60) or has_hourly_leave_at_checkout:
+                                # خرج في المسامحة أو خلال ساعة بعد الدوام أو لديه إجازة ساعية = غياب مبرر
                                 employee_data['absence_type'] = 'مبرر'
-                                if is_delayed:
+                                # ✅ استخدام تأخير أول دخول فقط
+                                if is_delayed_in_first_checkin:
                                     employee_data['delay_minutes'] = delay_minutes
                                 absences.append(employee_data)
-                                print("النتيجة: غياب مبرر (خروج في المسامحة أو قريب من نهاية الدوام)")
+                                print("النتيجة: غياب مبرر (خروج في المسامحة/إجازة ساعية)")
                             else:
                                 # خرج بعد الدوام بوقت طويل
-                                if is_delayed:
-                                    # متأخر لكن أكمل الدوام = تأخير
+                                # ✅ استخدام تأخير أول دخول فقط
+                                if is_delayed_in_first_checkin:
                                     employee_data['delay_minutes'] = delay_minutes
                                     delays.append(employee_data)
                                     print("النتيجة: تأخير (أكمل الدوام)")
@@ -4592,14 +4655,24 @@ def get_dashboard_data():
                                     # حضور طبيعي
                                     attendances.append(employee_data)
                                     print("النتيجة: حضور")
+                        else:
+                            # حالة أخرى - حضور طبيعي
+                            # ✅ استخدام تأخير أول دخول فقط
+                            if is_delayed_in_first_checkin:
+                                employee_data['delay_minutes'] = delay_minutes
+                                delays.append(employee_data)
+                                print("النتيجة: تأخير")
+                            else:
+                                attendances.append(employee_data)
+                                print("النتيجة: حضور")
                     else:
                         # لا يوجد تسجيل خروج
                         print("لا يوجد تسجيل خروج")
                         
                         if current_minutes > work_end_minutes:
                             # انتهى الدوام ولم يسجل خروج
-                            if is_delayed:
-                                # متأخر + لم يسجل خروج = تأخير
+                            # ✅ استخدام تأخير أول دخول فقط
+                            if is_delayed_in_first_checkin:
                                 employee_data['delay_minutes'] = delay_minutes
                                 delays.append(employee_data)
                                 print("النتيجة: تأخير (لم يسجل خروج بعد انتهاء الدوام)")
@@ -4610,8 +4683,8 @@ def get_dashboard_data():
                         else:
                             # ما زال في الدوام
                             if is_checkin_during_work:
-                                if is_delayed:
-                                    # متأخر وما زال في الدوام = تأخير
+                                # ✅ استخدام تأخير أول دخول فقط
+                                if is_delayed_in_first_checkin:
                                     employee_data['delay_minutes'] = delay_minutes
                                     delays.append(employee_data)
                                     print("النتيجة: تأخير (ما زال في الدوام)")
@@ -4688,7 +4761,7 @@ def get_dashboard_data():
 
     except Exception as e:
         print("خطأ في get_dashboard_data:", e)
-        traceback.print_exc()  # 👈 يطبع كامل الخطأ بما فيه السطر المسبب
+        traceback.print_exc()
         return jsonify({"error": "حدث خطأ في استرجاع البيانات"}), 500
 @app.route('/test-db')
 def test_db():
@@ -8344,6 +8417,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
