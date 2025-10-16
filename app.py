@@ -3198,10 +3198,13 @@ def employee_statistics():
         
         # حساب عدد ساعات العمل اليومية للموظف
         def get_work_hours(start_time, end_time):
-            # تحويل Time إلى datetime اليومي
-            dt_start = datetime.combine(date.today(), start_time)
-            dt_end   = datetime.combine(date.today(), end_time)
-            return (dt_end - dt_start).total_seconds() / 3600  # بالساعة
+            if start_time and end_time:
+                # تحويل Time إلى datetime اليومي
+                dt_start = datetime.combine(date.today(), start_time)
+                dt_end   = datetime.combine(date.today(), end_time)
+                return (dt_end - dt_start).total_seconds() / 3600  # بالساعة
+            return 8.0  # قيمة افتراضية
+        
         daily_hours = get_work_hours(employee.work_start_time, employee.work_end_time)
 
         # 3. جلب الإجازات الموافق عليها ضمن الفترة
@@ -3237,7 +3240,7 @@ def employee_statistics():
             )
         ).all()
 
-        # 4. حساب التأخيرات المبررة ضمن الفترة (التعديل الجديد)
+        # 4. حساب التأخيرات المبررة ضمن الفترة
         justified_delays = db.session.query(
             WorkDelayArchive.date,
             WorkDelayArchive.minutes_delayed
@@ -3276,7 +3279,7 @@ def employee_statistics():
         total_leave_hours += total_justified_delay_hours
         
         # 6. تفصيل الساعات إلى ساعات + دقائق للعرض
-        hourss = int(round(total_leave_hours * 60))  # 480
+        hourss = int(round(total_leave_hours * 60))
         print("leave total hours", hourss)
         
         # 7. حساب أيام العمل المتوقعة
@@ -3320,7 +3323,7 @@ def employee_statistics():
         
         print(f"📅 Daily attendance records grouped: {len(daily_records)} days")
         
-        # الآن نحسب لكل يوم: التأخير من أول سجل، الوقت الإضافي من آخر سجل، وإجمالي ساعات العمل
+        # الآن نحسب لكل يوم: التأخير من أول سجل، وإجمالي ساعات العمل
         for record_date, records in daily_records.items():
             actual_attendance_dates.add(record_date)
             
@@ -3348,25 +3351,28 @@ def employee_statistics():
                         total_delay_minutes += delay_minutes
                         delay_count += 1
                         print(f"   ⏰ First delay on {record_date}: {delay_minutes} minutes (check-in: {first_record.check_in_time})")
-            
-            # حساب الوقت الإضافي من آخر سجل خروج في اليوم
-            last_record = records_sorted[-1]
-            if (last_record.check_out_time and last_record.check_in_time and 
+        
+        # ============== حساب الوقت الإضافي منفصل (بدون تعديل) ==============
+        
+        # حساب الوقت الإضافي من جميع السجلات (بدون تجميع حسب اليوم)
+        for record in attendance_records:
+            if (record.check_out_time and record.check_in_time and 
                 employee.work_end_time and employee.work_start_time):
                 
-                expected_end = datetime.combine(record_date, employee.work_end_time)
-                actual_end = datetime.combine(record_date, last_record.check_out_time)
+                expected_end = datetime.combine(record.work_date, employee.work_end_time)
+                actual_end = record.check_out_time
                 
                 if actual_end > expected_end:
                     overtime_minutes = int((actual_end - expected_end).total_seconds() / 60)
                     if overtime_minutes > 10:
                         total_overtime_minutes += overtime_minutes
-                        print(f"   ⏱️ Overtime on {record_date}: {overtime_minutes} minutes (check-out: {last_record.check_out_time})")
+                        print(f"   ⏱️ Overtime on {record.work_date}: {overtime_minutes} minutes")
         
         present_days = len(actual_attendance_dates)
         print(f"✅ Present days calculated: {present_days}")
         print(f"   Actual attendance dates: {sorted(actual_attendance_dates)}")
         print(f"   Total work hours (all shifts): {total_work_hours}")
+        print(f"   Total overtime minutes: {total_overtime_minutes}")
         
         # ============== حساب ساعات العمل اليومية للموظف ==============
         
@@ -3376,8 +3382,8 @@ def employee_statistics():
             raise ValueError(f"Employee with ID {employee_id} not found")
         
         # حساب ساعات العمل اليومية للموظف
-        work_start_time = employee.work_start_time  # مثال: datetime.time(8, 0)
-        work_end_time = employee.work_end_time      # مثال: datetime.time(17, 0)
+        work_start_time = employee.work_start_time
+        work_end_time = employee.work_end_time
         
         # تحويل الأوقات إلى ساعات وحساب الفرق
         if work_start_time and work_end_time:
@@ -3395,7 +3401,7 @@ def employee_statistics():
         print(f"👤 Employee work hours: {hours_per_day} hours per day")
         print(f"   Work time: {work_start_time} - {work_end_time}")
         
-        # ============== حساب الإجازات والتأخيرات المبررة (التعديل الجديد) ==============
+        # ============== حساب الإجازات والتأخيرات المبررة ==============
         
         print(f"📋 Approved leaves found: {len(leaves)}")
         for i, leave in enumerate(leaves, 1):
@@ -3425,7 +3431,7 @@ def employee_statistics():
             elif leave.type == 'daily':
                 # الإجازة اليومية: نتحقق فقط من أن تاريخها ضمن الفترة
                 if start_date <= leave.start_date <= end_date:
-                    hours_in_period = hours_per_day
+                    hours_in_period = daily_hours
                     leave_hours_taken[classification] += hours_in_period
                     
                     # تحديث تفاصيل الأنواع
@@ -3443,7 +3449,7 @@ def employee_statistics():
                 # حساب الأيام الفعلية في الفترة
                 if overlap_start <= overlap_end:
                     days_in_period = (overlap_end - overlap_start).days + 1
-                    hours_in_period = days_in_period * hours_per_day
+                    hours_in_period = days_in_period * daily_hours
                     leave_hours_taken[classification] += hours_in_period
                     
                     # تحديث تفاصيل الأنواع
@@ -3454,18 +3460,28 @@ def employee_statistics():
                     
                     print(f"   📅 Multi-day leave: {days_in_period} days ({hours_in_period} hours) added")
 
-        # ثانياً: إضافة التأخيرات المبررة كإجازات عادية (التعديل الجديد)
+        # ثانياً: إضافة التأخيرات المبررة كإجازات عادية
         leave_hours_taken["normal"] += total_justified_delay_hours
         if total_justified_delay_hours > 0:
             leave_types_breakdown["delay"] = total_justified_delay_hours
             print(f"   ⏰ Justified delays: {total_justified_delay_hours:.2f} hours added to normal leave")
         
-        regular_leave_hours = employee.regular_leave_hours or 0
-        normal_leave_taken = leave_hours_taken.get("normal", 0)
-        emergency_hours = employee.emergency_leave_hours or 0
-        emergency_taken = leave_hours_taken.get("emergency", 0)
+        # استخدام الحقول الجديدة من جدول الموظفين
+        regular_leave_total = employee.regular_leave_total or 0
+        regular_leave_used = employee.regular_leave_used or 0
+        regular_leave_remaining = employee.regular_leave_remaining or 0
 
-        sick_hours = employee.sick_leave_hours or 0
+        sick_leave_total = employee.sick_leave_total or 0
+        sick_leave_used = employee.sick_leave_used or 0
+        sick_leave_remaining = employee.sick_leave_remaining or 0
+
+        emergency_leave_total = employee.emergency_leave_total or 0
+        emergency_leave_used = employee.emergency_leave_used or 0
+        emergency_leave_remaining = employee.emergency_leave_remaining or 0
+
+        # حساب الإجازات المأخوذة خلال الفترة الحالية
+        normal_leave_taken = leave_hours_taken.get("normal", 0)
+        emergency_taken = leave_hours_taken.get("emergency", 0)
         sick_taken = leave_hours_taken.get("sick", 0)
         
         # تحويل إجمالي الساعات لكل نوع إلى أيام
@@ -3483,37 +3499,38 @@ def employee_statistics():
             "sick": round(leave_hours_taken["sick"] / hours_per_day, 2)
         }
         
-        # رصيد الإجازات بالساعات والأيام
+        # رصيد الإجازات بالساعات والأيام (من الحقول الجديدة)
         leave_balance_hours = {
-            "normal": employee.regular_leave_hours,
-            "emergency": employee.emergency_leave_hours,
-            "sick": employee.sick_leave_hours
+            "normal": regular_leave_total,
+            "emergency": emergency_leave_total,
+            "sick": sick_leave_total
         }
         
         leave_balance_days = {
-            "normal": round((employee.regular_leave_hours or 0) / hours_per_day, 2),
-            "emergency": round((employee.emergency_leave_hours or 0) / hours_per_day, 2),
-            "sick": round((employee.sick_leave_hours or 0) / hours_per_day, 2)
+            "normal": round(regular_leave_total / hours_per_day, 2),
+            "emergency": round(emergency_leave_total / hours_per_day, 2),
+            "sick": round(sick_leave_total / hours_per_day, 2)
         }
         
-        # الرصيد المتبقي
+        # الرصيد المتبقي (من الحقول الجديدة)
         remaining_leave_hours = {
-            "normal": max(0, regular_leave_hours - normal_leave_taken),
-            "emergency": max(0, emergency_hours - emergency_taken),
-            "sick": max(0, sick_hours - sick_taken)
+            "normal": regular_leave_remaining,
+            "emergency": emergency_leave_remaining,
+            "sick": sick_leave_remaining
         }
         
         remaining_leave_days = {
-            "normal": round(remaining_leave_hours["normal"] / hours_per_day, 2),
-            "emergency": round(remaining_leave_hours["emergency"] / hours_per_day, 2),
-            "sick": round(remaining_leave_hours["sick"] / hours_per_day, 2)
+            "normal": round(regular_leave_remaining / hours_per_day, 2),
+            "emergency": round(emergency_leave_remaining / hours_per_day, 2),
+            "sick": round(sick_leave_remaining / hours_per_day, 2)
         }
 
         print(f"📊 Leave calculation results:")
         print(f"   Hours taken: normal={leave_hours_taken['normal']}, emergency={leave_hours_taken['emergency']}, sick={leave_hours_taken['sick']}")
         print(f"   Days taken: normal={leave_days_taken['normal']}, emergency={leave_days_taken['emergency']}, sick={leave_days_taken['sick']}")
-        print(f"   Remaining hours: normal={remaining_leave_hours['normal']}, emergency={remaining_leave_hours['emergency']}, sick={remaining_leave_hours['sick']}")
-        print(f"   Remaining days: normal={remaining_leave_days['normal']}, emergency={remaining_leave_days['emergency']}, sick={remaining_leave_days['sick']}")
+        print(f"   Leave balance - Total: normal={regular_leave_total}, emergency={emergency_leave_total}, sick={sick_leave_total}")
+        print(f"   Leave balance - Used: normal={regular_leave_used}, emergency={emergency_leave_used}, sick={sick_leave_used}")
+        print(f"   Leave balance - Remaining: normal={regular_leave_remaining}, emergency={emergency_leave_remaining}, sick={sick_leave_remaining}")
         
         # ============== حساب التعويضات والحضور الإضافي ==============
         
@@ -3529,7 +3546,7 @@ def employee_statistics():
         
         compensation_minutes = int((compensation_requests or 0) * 60)
         
-        # ============== حساب الحضور الإضافي (محدث) ==============
+        # ============== حساب الحضور الإضافي ==============
         
         # حساب الحضور الإضافي - منفصل للأيام العادية والعطل
         regular_days_additional = db.session.query(
@@ -3588,7 +3605,7 @@ def employee_statistics():
                 "status": rec.status
             })
         
-        # سجلات الدوام الإضافي خلال الفترة (محدث)
+        # سجلات الدوام الإضافي خلال الفترة
         add_att_recs = db.session.query(
             AdditionalAttendanceRecord.date,
             AdditionalAttendanceRecord.add_attendance_minutes,
@@ -3615,13 +3632,13 @@ def employee_statistics():
                 "date": rec.date.strftime("%Y-%m-%d"),
                 "duration_minutes": rec.add_attendance_minutes,
                 "duration_hours": round(rec.add_attendance_minutes / 60, 2),
-                "start_time": "-",
-                "end_time": "-",
+                "start_time": rec.start_time.strftime("%H:%M") if rec.start_time else "-",
+                "end_time": rec.end_time.strftime("%H:%M") if rec.end_time else "-",
                 "notes": rec.notes or "-",
                 "type": type_description
             })
         
-        # دمج السجلات في جدول واحد (محدث)
+        # دمج السجلات في جدول واحد
         merged_records = []
 
         for rec in comp_requests:
@@ -3668,7 +3685,7 @@ def employee_statistics():
         salary_info = {}
         
         if salary_component:
-            # ============== التعديل: حساب إجمالي الساعات المدفوعة ==============
+            # حساب إجمالي الساعات المدفوعة
             total_paid_hours = total_work_hours + total_leave_hours
             
             print(f"💰 Paid hours calculation:")
@@ -3678,7 +3695,7 @@ def employee_statistics():
 
             # 1. قراءة القيم الأساسية من salary_component
             base_salary = salary_component.base_salary or 0
-            hour_salary = salary_component.hour_salary or 0
+            hour_salary = float(salary_component.hour_salary or 0)
             overtime_rate = salary_component.overtime_rate or 1
             holiday_overtime_rate = salary_component.holiday_overtime_rate or 1
 
@@ -3718,22 +3735,22 @@ def employee_statistics():
             administrative_deduction_dec = Decimal(str(administrative_deduction))
             regular_overtime_hours = Decimal(str(regular_days_additional / 60))
             holiday_overtime_hours = Decimal(str(holidays_additional / 60))
-            total_paid_hours_dec = Decimal(str(total_paid_hours))  # استخدام الساعات المدفوعة بدلاً من ساعات العمل فقط
+            total_paid_hours_dec = Decimal(str(total_paid_hours))
 
             print(f"10) Total Paid Hours: {total_paid_hours_dec} hours")
             print(f"11) Regular Overtime Hours: {regular_overtime_hours} hours")
             print(f"12) Holiday Attendance Hours: {holiday_overtime_hours} hours")
 
             # 6. حساب الراتب الأساسي المكتسب (باستخدام الساعات المدفوعة)
-            actual_salary_earned = total_paid_hours_dec * hour_salary
+            actual_salary_earned = total_paid_hours_dec * Decimal(str(hour_salary))
             print(f"13) Actual Salary Earned = Total Paid Hours × Hourly Wage = {total_paid_hours_dec} × {hour_salary} = {actual_salary_earned}")
 
             # 7. حساب أجر الوقت الإضافي العادي
-            regular_overtime_pay = regular_overtime_hours * hour_salary * overtime_rate_dec
+            regular_overtime_pay = regular_overtime_hours * Decimal(str(hour_salary)) * overtime_rate_dec
             print(f"14) Regular Overtime Pay = Overtime Hours × Hourly Wage × Overtime Rate = {regular_overtime_hours} × {hour_salary} × {overtime_rate_dec} = {regular_overtime_pay}")
 
             # 8. حساب أجر الحضور الإضافي في ايام العطل
-            holiday_overtime_pay = holiday_overtime_hours * hour_salary * holiday_overtime_rate_dec
+            holiday_overtime_pay = holiday_overtime_hours * Decimal(str(hour_salary)) * holiday_overtime_rate_dec
             print(f"15) Holiday Overtime Pay = Approved Extra Hours × Hourly Wage × Overtime Rate = {holiday_overtime_hours} × {hour_salary} × {holiday_overtime_rate_dec} = {holiday_overtime_pay}")
 
             # 9. حساب إجمالي البدلات
@@ -3758,26 +3775,26 @@ def employee_statistics():
                 "overtime_rate": overtime_rate,
                 "holiday_overtime_rate": holiday_overtime_rate,
                 "actual_work_hours": total_work_hours,
-                "approved_leave_hours": total_leave_hours,  # إضافة ساعات الإجازات
-                "total_paid_hours": round(total_paid_hours, 2),  # إضافة إجمالي الساعات المدفوعة
-                "actual_salary_earned": round(actual_salary_earned, 2),
-                "regular_overtime_hours": round(regular_overtime_hours, 2),
-                "regular_overtime_pay": round(regular_overtime_pay, 2),
-                "holiday_overtime_pay": round(holiday_overtime_pay, 2),
-                "total_overtime_pay": round(regular_overtime_pay + holiday_overtime_pay, 2),
+                "approved_leave_hours": total_leave_hours,
+                "total_paid_hours": round(total_paid_hours, 2),
+                "actual_salary_earned": round(float(actual_salary_earned), 2),
+                "regular_overtime_hours": round(float(regular_overtime_hours), 2),
+                "regular_overtime_pay": round(float(regular_overtime_pay), 2),
+                "holiday_overtime_pay": round(float(holiday_overtime_pay), 2),
+                "total_overtime_pay": round(float(regular_overtime_pay + holiday_overtime_pay), 2),
                 "allowances": {
                     "internet_allowance": internet_allowance,
                     "transport_allowance": transport_allowance,
                     "depreciation_allowance": depreciation_allowance,
                     "administrative_allowance": administrative_allowance,
-                    "total_allowances": total_allowances
+                    "total_allowances": float(total_allowances)
                 },
                 "deductions": {
                     "administrative_deduction": administrative_deduction,
-                    "total_deductions": total_deductions
+                    "total_deductions": float(total_deductions)
                 },
-                "gross_salary": round(gross_salary, 2),
-                "net_salary": round(net_salary, 2)
+                "gross_salary": round(float(gross_salary), 2),
+                "net_salary": round(float(net_salary), 2)
             }
             
             print(f"💰 Salary calculation:")
@@ -3800,8 +3817,7 @@ def employee_statistics():
         
         # ============== حساب التأخير الغير مبرر من جدول WorkDelayArchive ==============
         
-        # استعلام لحساب أول تأخير في كل يوم (التأخير الأقدم زمنياً في حال تعدد التأخيرات)
-        # نستخدم subquery للحصول على أقدم timestamp لكل يوم
+        # استعلام لحساب أول تأخير في كل يوم
         subquery = db.session.query(
             WorkDelayArchive.date,
             func.min(WorkDelayArchive.from_timestamp).label('first_delay_time')
@@ -3860,8 +3876,8 @@ def employee_statistics():
                 "total_unjustified_delay_minutes": total_unjustified_delay,
                 "total_unjustified_delay_hours": round(total_unjustified_delay / 60, 2),
                 "total_work_hours": round(total_work_hours, 2),
-                "total_leave_hours": round(total_leave_hours, 2),  # إضافة جديدة
-                "total_paid_hours": round(total_paid_hours, 2) if salary_component else 0,  # إضافة جديدة
+                "total_leave_hours": round(total_leave_hours, 2),
+                "total_paid_hours": round(total_paid_hours, 2) if salary_component else 0,
                 "delays_count": delay_count,
                 "total_delay_minutes": total_delay_minutes,
                 "overtime_minutes": total_overtime_minutes,
@@ -3892,7 +3908,23 @@ def employee_statistics():
                 "remaining_leave_hours": remaining_leave_hours,
                 "remaining_leave_days": remaining_leave_days,
                 "justified_delays_count": len(justified_delays),
-                "justified_delays_hours": total_justified_delay_hours
+                "justified_delays_hours": total_justified_delay_hours,
+                # إضافة معلومات الإجازات من الجداول الجديدة
+                "regular_leave_details": {
+                    "total": regular_leave_total,
+                    "used": regular_leave_used,
+                    "remaining": regular_leave_remaining
+                },
+                "sick_leave_details": {
+                    "total": sick_leave_total,
+                    "used": sick_leave_used,
+                    "remaining": sick_leave_remaining
+                },
+                "emergency_leave_details": {
+                    "total": emergency_leave_total,
+                    "used": emergency_leave_used,
+                    "remaining": emergency_leave_remaining
+                }
             },
             "salary_info": salary_info,
             "compensation_records": compensation_records,
@@ -8560,6 +8592,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
