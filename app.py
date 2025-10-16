@@ -3171,7 +3171,7 @@ def employee_statistics():
         
         print(f"📊 Attendance records found: {len(attendance_records)}")
         for record in attendance_records:
-            print(f"   Date: {record.work_date}, Check-in: {record.check_in_time}")
+            print(f"   Date: {record.work_date}, Check-in: {record.check_in_time}, Check-out: {record.check_out_time}, Work Hours: {record.work_hours}")
         
         # 2. الحصول على العطل الرسمية
         official_holidays = db.session.query(OfficialHoliday.holiday_date).filter(
@@ -3300,69 +3300,73 @@ def employee_statistics():
         print(f"📈 Total expected work days: {total_expected_work_days}")
         print(f"   Expected work dates: {expected_work_dates}")
         
-        # ============== حساب التأخير لأول حضور فقط في نفس اليوم ==============
+        # ============== حساب الحضور والساعات لجميع الورديات في اليوم ==============
         
-        # 8. حساب أيام الحضور الفعلية والتأخير
+        # 8. حساب أيام الحضور الفعلية والتأخير مع دعم الورديات المتعددة
         actual_attendance_dates = set()
         total_work_hours = 0
         total_delay_minutes = 0
         delay_count = 0
         total_overtime_minutes = 0
         
-        # تجميع السجلات حسب التاريخ وأخذ أول سجل لكل يوم
-        daily_first_records = {}
+        # تجميع السجلات حسب التاريخ لحساب إجمالي ساعات العمل
+        daily_records = {}
         
         for record in attendance_records:
             if record.work_date:
-                # إذا كان هناك سجل سابق لنفس اليوم، نقارن الأوقات
-                if record.work_date in daily_first_records:
-                    existing_record = daily_first_records[record.work_date]
-                    # إذا كان الوقت الحالي قبل الوقت الموجود، نستبدله (أول سجل)
-                    if record.check_in_time and existing_record.check_in_time:
-                        if record.check_in_time < existing_record.check_in_time:
-                            daily_first_records[record.work_date] = record
-                else:
-                    # إذا لم يكن هناك سجل لهذا اليوم، نضيفه
-                    daily_first_records[record.work_date] = record
+                if record.work_date not in daily_records:
+                    daily_records[record.work_date] = []
+                daily_records[record.work_date].append(record)
         
-        print(f"📅 First attendance records per day: {len(daily_first_records)}")
+        print(f"📅 Daily attendance records grouped: {len(daily_records)} days")
         
-        # الآن نحسب التأخير والوقت الإضافي للسجلات الأولى فقط
-        for record_date, record in daily_first_records.items():
+        # الآن نحسب لكل يوم: التأخير من أول سجل، الوقت الإضافي من آخر سجل، وإجمالي ساعات العمل
+        for record_date, records in daily_records.items():
             actual_attendance_dates.add(record_date)
             
-            # حساب ساعات العمل
-            if record.work_hours:
-                total_work_hours += record.work_hours
+            # ترتيب السجلات حسب وقت الدخول
+            records_sorted = sorted(records, key=lambda x: x.check_in_time if x.check_in_time else datetime.min.time())
             
-            # حساب التأخير للسجل الأول فقط
-            if record.check_in_time and employee.work_start_time:
-                expected_start = datetime.combine(record.work_date, employee.work_start_time)
-                actual_start = record.check_in_time
+            # حساب إجمالي ساعات العمل لليوم (جمع ساعات العمل من جميع السجلات)
+            daily_work_hours = 0
+            for record in records_sorted:
+                if record.work_hours:
+                    daily_work_hours += record.work_hours
+                    print(f"   📊 Adding work hours for {record_date}: {record.work_hours} hours (total for day: {daily_work_hours})")
+            
+            total_work_hours += daily_work_hours
+            
+            # حساب التأخير من أول سجل دخول في اليوم
+            first_record = records_sorted[0]
+            if first_record.check_in_time and employee.work_start_time:
+                expected_start = datetime.combine(record_date, employee.work_start_time)
+                actual_start = datetime.combine(record_date, first_record.check_in_time)
                 
                 if actual_start > expected_start:
                     delay_minutes = int((actual_start - expected_start).total_seconds() / 60)
                     if delay_minutes > 15:
                         total_delay_minutes += delay_minutes
                         delay_count += 1
-                        print(f"   ⏰ First delay on {record.work_date}: {delay_minutes} minutes (check-in: {record.check_in_time})")
+                        print(f"   ⏰ First delay on {record_date}: {delay_minutes} minutes (check-in: {first_record.check_in_time})")
             
-            # حساب الوقت الإضافي للسجل الأخير (يبقى كما هو)
-            if (record.check_out_time and record.check_in_time and 
+            # حساب الوقت الإضافي من آخر سجل خروج في اليوم
+            last_record = records_sorted[-1]
+            if (last_record.check_out_time and last_record.check_in_time and 
                 employee.work_end_time and employee.work_start_time):
                 
-                expected_end = datetime.combine(record.work_date, employee.work_end_time)
-                actual_end = record.check_out_time
+                expected_end = datetime.combine(record_date, employee.work_end_time)
+                actual_end = datetime.combine(record_date, last_record.check_out_time)
                 
                 if actual_end > expected_end:
                     overtime_minutes = int((actual_end - expected_end).total_seconds() / 60)
                     if overtime_minutes > 10:
                         total_overtime_minutes += overtime_minutes
-                        print(f"   ⏱️ Overtime on {record.work_date}: {overtime_minutes} minutes")
+                        print(f"   ⏱️ Overtime on {record_date}: {overtime_minutes} minutes (check-out: {last_record.check_out_time})")
         
         present_days = len(actual_attendance_dates)
         print(f"✅ Present days calculated: {present_days}")
         print(f"   Actual attendance dates: {sorted(actual_attendance_dates)}")
+        print(f"   Total work hours (all shifts): {total_work_hours}")
         
         # ============== حساب ساعات العمل اليومية للموظف ==============
         
@@ -8556,6 +8560,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
