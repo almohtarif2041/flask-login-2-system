@@ -1242,17 +1242,26 @@ def update_leave_request(request_id):
         db.session.rollback()
         return jsonify({'error': f'خطأ في تحديث الطلب: {str(e)}'}), 500
 # جلب جميع التأخيرات غير المبررة
+# جلب جميع التأخيرات غير المبررة مع تحسين الأداء
 @app.route('/api/admin-unjustified-delays', methods=['GET'])
 def get_admin_unjustified_delays():
     try:
-        # جلب فقط التأخيرات غير المبررة
-        delay_requests = WorkDelayArchive.query.filter_by(status='Unjustified').all()
+        # جلب التأخيرات مع تحميل العلاقات مسبقاً
+        delay_requests = (WorkDelayArchive.query
+                         .filter_by(status='Unjustified')
+                         .join(Employee, WorkDelayArchive.employee_id == Employee.id)
+                         .join(Supervisor, WorkDelayArchive.supervisor_id == Supervisor.supervisor_ID)
+                         .options(
+                             db.joinedload(WorkDelayArchive.employee).joinedload(Employee.department),
+                             db.joinedload(WorkDelayArchive.supervisor).joinedload(Supervisor.employee)
+                         )
+                         .all())
         
         requests_data = []
         for record in delay_requests:
             # معلومات الموظف
-            employee_name = record.employee.name if record.employee else 'غير معروف'
-            employee_arname = record.employee.arname if record.employee else 'غير معروف'
+            employee_name = record.employee.full_name_english if record.employee else 'غير معروف'
+            employee_arname = record.employee.full_name_arabic if record.employee else 'غير معروف'
             employee_role = record.employee.role if record.employee else 'غير معروف'
             
             # معلومات القسم
@@ -1262,7 +1271,10 @@ def get_admin_unjustified_delays():
             ) else 'غير محدد'
             
             # معلومات المشرف
-            supervisor_name = record.supervisor.name if record.supervisor else 'غير معروف'
+            supervisor_name = record.supervisor.employee.full_name_english if (
+                record.supervisor and 
+                record.supervisor.employee
+            ) else 'غير معروف'
             
             requests_data.append({
                 'id': record.id,
@@ -8665,6 +8677,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
