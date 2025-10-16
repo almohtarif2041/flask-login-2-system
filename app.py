@@ -3328,7 +3328,7 @@ def employee_statistics():
             actual_attendance_dates.add(record_date)
             
             # ترتيب السجلات حسب وقت الدخول
-            records_sorted = sorted(records, key=lambda x: x.check_in_time if x.check_in_time else datetime.min.time())
+            records_sorted = sorted(records, key=lambda x: x.check_in_time if x.check_in_time else datetime.min)
             
             # حساب إجمالي ساعات العمل لليوم (جمع ساعات العمل من جميع السجلات)
             daily_work_hours = 0
@@ -3339,18 +3339,20 @@ def employee_statistics():
             
             total_work_hours += daily_work_hours
             
-            # حساب التأخير من أول سجل دخول في اليوم
+            # حساب التأخير من أول سجل دخول في اليوم - التصحيح هنا
             first_record = records_sorted[0]
             if first_record.check_in_time and employee.work_start_time:
+                # استخراج الوقت فقط من DateTime
+                check_in_time = first_record.check_in_time.time()
                 expected_start = datetime.combine(record_date, employee.work_start_time)
-                actual_start = datetime.combine(record_date, first_record.check_in_time)
+                actual_start = datetime.combine(record_date, check_in_time)
                 
                 if actual_start > expected_start:
                     delay_minutes = int((actual_start - expected_start).total_seconds() / 60)
                     if delay_minutes > 15:
                         total_delay_minutes += delay_minutes
                         delay_count += 1
-                        print(f"   ⏰ First delay on {record_date}: {delay_minutes} minutes (check-in: {first_record.check_in_time})")
+                        print(f"   ⏰ First delay on {record_date}: {delay_minutes} minutes (check-in: {check_in_time})")
         
         # ============== حساب الوقت الإضافي منفصل (بدون تعديل) ==============
         
@@ -3359,8 +3361,10 @@ def employee_statistics():
             if (record.check_out_time and record.check_in_time and 
                 employee.work_end_time and employee.work_start_time):
                 
+                # استخراج الوقت فقط من DateTime
+                check_out_time = record.check_out_time.time()
                 expected_end = datetime.combine(record.work_date, employee.work_end_time)
-                actual_end = record.check_out_time
+                actual_end = datetime.combine(record.work_date, check_out_time)
                 
                 if actual_end > expected_end:
                     overtime_minutes = int((actual_end - expected_end).total_seconds() / 60)
@@ -8592,6 +8596,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
