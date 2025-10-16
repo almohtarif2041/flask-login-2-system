@@ -1241,6 +1241,75 @@ def update_leave_request(request_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': f'خطأ في تحديث الطلب: {str(e)}'}), 500
+# جلب جميع التأخيرات غير المبررة
+@app.route('/api/admin-unjustified-delays', methods=['GET'])
+def get_admin_unjustified_delays():
+    try:
+        # جلب فقط التأخيرات غير المبررة
+        delay_requests = WorkDelayArchive.query.filter_by(status='Unjustified').all()
+        
+        requests_data = []
+        for record in delay_requests:
+            # معلومات الموظف
+            employee_name = record.employee.name if record.employee else 'غير معروف'
+            employee_arname = record.employee.arname if record.employee else 'غير معروف'
+            employee_role = record.employee.role if record.employee else 'غير معروف'
+            
+            # معلومات القسم
+            department_name = record.employee.department.dep_name if (
+                record.employee and 
+                record.employee.department
+            ) else 'غير محدد'
+            
+            # معلومات المشرف
+            supervisor_name = record.supervisor.name if record.supervisor else 'غير معروف'
+            
+            requests_data.append({
+                'id': record.id,
+                'timestamp': record.timestamp.isoformat() if record.timestamp else None,
+                'employee_id': record.employee_id,
+                'employee_name': employee_name,
+                'arname': employee_arname,
+                'role': employee_role,
+                'date': record.date.isoformat() if record.date else None,
+                'minutes_delayed': record.minutes_delayed,
+                'from_timestamp': record.from_timestamp.isoformat() if record.from_timestamp else None,
+                'to_timestamp': record.to_timestamp.isoformat() if record.to_timestamp else None,
+                'delay_note': record.delay_note,
+                'status': record.status,
+                'department': department_name,
+                'supervisor_name': supervisor_name,
+                'supervisor_id': record.supervisor_id
+            })
+        
+        return jsonify(requests_data), 200
+        
+    except Exception as e:
+        return jsonify({'error': f'خطأ في جلب التأخيرات غير المبررة: {str(e)}'}), 500
+
+# حذف تأخير غير مبرر
+@app.route('/api/admin-unjustified-delays/<int:delay_id>', methods=['DELETE'])
+def delete_admin_unjustified_delay(delay_id):
+    try:
+        # البحث عن التأخير
+        delay_request = db.session.get(WorkDelayArchive, delay_id)
+        
+        if not delay_request:
+            return jsonify({'error': 'التأخير غير موجود'}), 404
+        
+        # التأكد من أن التأخير غير مبرر
+        if delay_request.status != 'Unjustified':
+            return jsonify({'error': 'لا يمكن حذف التأخير المبرر'}), 400
+        
+        # حذف التأخير من قاعدة البيانات
+        db.session.delete(delay_request)
+        db.session.commit()
+        
+        return jsonify({'message': 'تم حذف التأخير غير المبرر بنجاح'}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'خطأ في حذف التأخير غير المبرر: {str(e)}'}), 500
 # جلب جميع طلبات العمل الإضافي
 @app.route('/api/admin-overtime-requests', methods=['GET'])
 def get_admin_overtime_requests():
@@ -8596,6 +8665,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
