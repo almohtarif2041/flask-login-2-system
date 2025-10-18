@@ -8533,6 +8533,7 @@ def get_employees_list_super():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 # routes خاصة بالتحكم في الحضور
+# routes خاصة بالتحكم في الحضور
 @app.route('/api/attendance-control/records', methods=['GET'])
 def get_attendance_control_records():
     """جلب سجلات الحضور للتحكم والتعديل"""
@@ -8542,7 +8543,8 @@ def get_attendance_control_records():
         date_from = request.args.get('date_from')
         date_to = request.args.get('date_to')
         
-        query = AttendanceRecord.query.join(Employee)
+        # البدء بالاستعلام الأساسي مع استبعاد الأدمن
+        query = AttendanceRecord.query.join(Employee).filter(Employee.role != 'ادمن')
         
         # تطبيق الفلاتر
         if employee_id:
@@ -8560,13 +8562,30 @@ def get_attendance_control_records():
         
         records_data = []
         for record in records:
+            # تحويل الأوقات إلى توقيت سوريا للعرض
+            damascus_tz = pytz.timezone('Asia/Damascus')
+            
+            check_in_syria = None
+            if record.check_in_time:
+                if record.check_in_time.tzinfo is None:
+                    check_in_syria = damascus_tz.localize(record.check_in_time)
+                else:
+                    check_in_syria = record.check_in_time.astimezone(damascus_tz)
+            
+            check_out_syria = None
+            if record.check_out_time:
+                if record.check_out_time.tzinfo is None:
+                    check_out_syria = damascus_tz.localize(record.check_out_time)
+                else:
+                    check_out_syria = record.check_out_time.astimezone(damascus_tz)
+            
             records_data.append({
                 'id': record.id,
                 'employee_id': record.employee_id,
                 'employee_name': record.employee.full_name_arabic,
                 'department': record.employee.department.dep_name if record.employee.department else 'غير محدد',
-                'check_in_time': record.check_in_time.isoformat() if record.check_in_time else None,
-                'check_out_time': record.check_out_time.isoformat() if record.check_out_time else None,
+                'check_in_time': check_in_syria.isoformat() if check_in_syria else None,
+                'check_out_time': check_out_syria.isoformat() if check_out_syria else None,
                 'work_date': record.work_date.isoformat() if record.work_date else None,
                 'office_work_hours': record.office_work_hours,
                 'work_hours': record.work_hours,
@@ -8580,6 +8599,7 @@ def get_attendance_control_records():
     except Exception as e:
         print(f"خطأ في جلب سجلات الحضور: {str(e)}")
         return jsonify({'error': 'حدث خطأ في جلب البيانات'}), 500
+
 
 @app.route('/api/attendance-control/records/<int:record_id>', methods=['PUT'])
 def update_attendance_control_record(record_id):
@@ -8595,12 +8615,34 @@ def update_attendance_control_record(record_id):
         damascus_tz = pytz.timezone('Asia/Damascus')
         
         if 'check_in_time' in data and data['check_in_time']:
-            check_in_str = data['check_in_time'].replace('Z', '+00:00')
-            record.check_in_time = datetime.fromisoformat(check_in_str).astimezone(damascus_tz)
+            # إزالة Z إذا كانت موجودة وتحويل إلى datetime
+            check_in_str = data['check_in_time'].replace('Z', '')
+            
+            # تحويل من string إلى datetime
+            try:
+                # محاولة التحليل بدون معلومات timezone أولاً
+                check_in_naive = datetime.fromisoformat(check_in_str)
+                # إضافة timezone سوريا
+                record.check_in_time = damascus_tz.localize(check_in_naive)
+            except:
+                # إذا فشل، محاولة التحليل مع timezone
+                check_in_dt = datetime.fromisoformat(check_in_str)
+                record.check_in_time = check_in_dt.astimezone(damascus_tz)
         
         if 'check_out_time' in data and data['check_out_time']:
-            check_out_str = data['check_out_time'].replace('Z', '+00:00')
-            record.check_out_time = datetime.fromisoformat(check_out_str).astimezone(damascus_tz)
+            # إزالة Z إذا كانت موجودة وتحويل إلى datetime
+            check_out_str = data['check_out_time'].replace('Z', '')
+            
+            # تحويل من string إلى datetime
+            try:
+                # محاولة التحليل بدون معلومات timezone أولاً
+                check_out_naive = datetime.fromisoformat(check_out_str)
+                # إضافة timezone سوريا
+                record.check_out_time = damascus_tz.localize(check_out_naive)
+            except:
+                # إذا فشل، محاولة التحليل مع timezone
+                check_out_dt = datetime.fromisoformat(check_out_str)
+                record.check_out_time = check_out_dt.astimezone(damascus_tz)
         elif 'check_out_time' in data and not data['check_out_time']:
             record.check_out_time = None
         
@@ -8664,10 +8706,16 @@ def update_attendance_control_record(record_id):
         
         db.session.commit()
         
+        # إعادة البيانات المحدثة بتوقيت سوريا
+        check_in_syria = record.check_in_time.astimezone(damascus_tz) if record.check_in_time else None
+        check_out_syria = record.check_out_time.astimezone(damascus_tz) if record.check_out_time else None
+        
         return jsonify({
             'success': True,
             'message': 'تم تحديث سجل الحضور بنجاح',
             'record': {
+                'check_in_time': check_in_syria.isoformat() if check_in_syria else None,
+                'check_out_time': check_out_syria.isoformat() if check_out_syria else None,
                 'office_work_hours': record.office_work_hours,
                 'work_hours': record.work_hours
             }
@@ -8676,13 +8724,18 @@ def update_attendance_control_record(record_id):
     except Exception as e:
         db.session.rollback()
         print(f"خطأ في تحديث سجل الحضور: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': f'حدث خطأ في التحديث: {str(e)}'}), 500
+
 
 @app.route('/api/attendance-control/employees', methods=['GET'])
 def get_employees_for_attendance_control():
-    """جلب قائمة الموظفين لفلترة سجلات الحضور"""
+    """جلب قائمة الموظفين لفلترة سجلات الحضور (استبعاد الأدمن)"""
     try:
-        employees = Employee.query.all()
+        # استبعاد الموظفين ذوي دور "ادمن"
+        employees = Employee.query.filter(Employee.role != 'ادمن').all()
+        
         employees_data = [{
             'id': emp.id,
             'name': emp.full_name_arabic,
@@ -8840,6 +8893,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
