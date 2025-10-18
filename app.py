@@ -8532,6 +8532,169 @@ def get_employees_list_super():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+# routes خاصة بالتحكم في الحضور
+@app.route('/api/attendance-control/records', methods=['GET'])
+def get_attendance_control_records():
+    """جلب سجلات الحضور للتحكم والتعديل"""
+    try:
+        # معلمات التصفية
+        employee_id = request.args.get('employee_id', type=int)
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        
+        query = AttendanceRecord.query.join(Employee)
+        
+        # تطبيق الفلاتر
+        if employee_id:
+            query = query.filter(AttendanceRecord.employee_id == employee_id)
+        
+        if date_from:
+            date_from_obj = datetime.strptime(date_from, '%Y-%m-%d').date()
+            query = query.filter(AttendanceRecord.work_date >= date_from_obj)
+        
+        if date_to:
+            date_to_obj = datetime.strptime(date_to, '%Y-%m-%d').date()
+            query = query.filter(AttendanceRecord.work_date <= date_to_obj)
+        
+        records = query.order_by(AttendanceRecord.work_date.desc()).all()
+        
+        records_data = []
+        for record in records:
+            records_data.append({
+                'id': record.id,
+                'employee_id': record.employee_id,
+                'employee_name': record.employee.full_name_arabic,
+                'department': record.employee.department.dep_name if record.employee.department else 'غير محدد',
+                'check_in_time': record.check_in_time.isoformat() if record.check_in_time else None,
+                'check_out_time': record.check_out_time.isoformat() if record.check_out_time else None,
+                'work_date': record.work_date.isoformat() if record.work_date else None,
+                'office_work_hours': record.office_work_hours,
+                'work_hours': record.work_hours,
+                'notes': record.notes,
+                'is_auto_checkout': record.is_auto_checkout,
+                'status': 'مكتمل' if record.check_out_time else 'قيد العمل'
+            })
+        
+        return jsonify(records_data)
+        
+    except Exception as e:
+        print(f"خطأ في جلب سجلات الحضور: {str(e)}")
+        return jsonify({'error': 'حدث خطأ في جلب البيانات'}), 500
+
+@app.route('/api/attendance-control/records/<int:record_id>', methods=['PUT'])
+def update_attendance_control_record(record_id):
+    """تحديث سجل الحضور وإعادة حساب الساعات"""
+    try:
+        data = request.get_json()
+        record = db.session.get(AttendanceRecord, record_id)
+        
+        if not record:
+            return jsonify({'error': 'سجل الحضور غير موجود'}), 404
+        
+        # تحديث الأوقات
+        damascus_tz = pytz.timezone('Asia/Damascus')
+        
+        if 'check_in_time' in data and data['check_in_time']:
+            check_in_str = data['check_in_time'].replace('Z', '+00:00')
+            record.check_in_time = datetime.fromisoformat(check_in_str).astimezone(damascus_tz)
+        
+        if 'check_out_time' in data and data['check_out_time']:
+            check_out_str = data['check_out_time'].replace('Z', '+00:00')
+            record.check_out_time = datetime.fromisoformat(check_out_str).astimezone(damascus_tz)
+        elif 'check_out_time' in data and not data['check_out_time']:
+            record.check_out_time = None
+        
+        if 'notes' in data:
+            record.notes = data['notes']
+        
+        # إعادة حساب ساعات العمل إذا كان هناك دخول وخروج
+        if record.check_in_time and record.check_out_time:
+            # تأكد من أن الخروج بعد الدخول
+            if record.check_out_time <= record.check_in_time:
+                return jsonify({'error': 'وقت الخروج يجب أن يكون بعد وقت الدخول'}), 400
+            
+            # حساب ساعات العمل الفعلية (office_work_hours) - الوقت الفعلي بين الدخول والخروج
+            work_seconds = (record.check_out_time - record.check_in_time).total_seconds()
+            office_work_hours = round(work_seconds / 3600, 2)
+            record.office_work_hours = office_work_hours
+            
+            # حساب ساعات العمل النظامية (work_hours) - مع فترة السماح 15 دقيقة
+            employee = record.employee
+            work_date = record.work_date if record.work_date else record.check_in_time.date()
+            
+            work_start = employee.work_start_time
+            work_end = employee.work_end_time
+            
+            work_start_dt = damascus_tz.localize(datetime.combine(work_date, work_start))
+            work_end_dt = damascus_tz.localize(datetime.combine(work_date, work_end))
+            
+            # فترة السماح 15 دقيقة بعد بداية العمل
+            grace_period_end = work_start_dt + timedelta(minutes=15)
+            
+            # تحديد وقت البدء لاحتساب work_hours:
+            # - إذا دخل خلال فترة السماح (من 9:00 إلى 9:15) → يعتبر كأنه دخل 9:00
+            # - إذا دخل بعد فترة السماح (بعد 9:15) → يبدأ الحساب من وقت الدخول الفعلي
+            if record.check_in_time <= grace_period_end:
+                effective_start_time = work_start_dt
+            else:
+                effective_start_time = record.check_in_time
+            
+            # وقت النهاية الفعلي هو الأقل بين وقت الخروج ووقت انتهاء الدوام
+            effective_end_time = min(record.check_out_time, work_end_dt)
+            
+            # احتساب ساعات العمل النظامية (work_hours)
+            if effective_start_time < effective_end_time:
+                work_seconds_within = (effective_end_time - effective_start_time).total_seconds()
+                work_hours_within = round(work_seconds_within / 3600, 2)
+            else:
+                work_hours_within = 0
+                
+            record.work_hours = work_hours_within
+            
+            print(f"🔍 تفاصيل الحساب:")
+            print(f"   - وقت الدخول: {record.check_in_time}")
+            print(f"   - وقت الخروج: {record.check_out_time}")
+            print(f"   - بداية الدوام: {work_start_dt}")
+            print(f"   - نهاية الدوام: {work_end_dt}")
+            print(f"   - نهاية فترة السماح: {grace_period_end}")
+            print(f"   - وقت البدء الفعلي (لـ work_hours): {effective_start_time}")
+            print(f"   - وقت النهاية الفعلي: {effective_end_time}")
+            print(f"   - ساعات العمل الفعلية (office): {office_work_hours}")
+            print(f"   - ساعات العمل النظامية (work): {work_hours_within}")
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'تم تحديث سجل الحضور بنجاح',
+            'record': {
+                'office_work_hours': record.office_work_hours,
+                'work_hours': record.work_hours
+            }
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"خطأ في تحديث سجل الحضور: {str(e)}")
+        return jsonify({'error': f'حدث خطأ في التحديث: {str(e)}'}), 500
+
+@app.route('/api/attendance-control/employees', methods=['GET'])
+def get_employees_for_attendance_control():
+    """جلب قائمة الموظفين لفلترة سجلات الحضور"""
+    try:
+        employees = Employee.query.all()
+        employees_data = [{
+            'id': emp.id,
+            'name': emp.full_name_arabic,
+            'department': emp.department.dep_name if emp.department else 'غير محدد',
+            'work_start_time': emp.work_start_time.strftime('%H:%M') if emp.work_start_time else None,
+            'work_end_time': emp.work_end_time.strftime('%H:%M') if emp.work_end_time else None
+        } for emp in employees]
+        
+        return jsonify(employees_data)
+    except Exception as e:
+        print(f"خطأ في جلب الموظفين: {str(e)}")
+        return jsonify({'error': 'حدث خطأ في جلب البيانات'}), 500
 @app.route('/home')
 def home():
     if 'employee' not in session:
@@ -8677,6 +8840,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
