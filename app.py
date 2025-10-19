@@ -8615,36 +8615,25 @@ def update_attendance_control_record(record_id):
         damascus_tz = pytz.timezone('Asia/Damascus')
         
         if 'check_in_time' in data and data['check_in_time']:
-            # إزالة Z إذا كانت موجودة وتحويل إلى datetime
-            check_in_str = data['check_in_time'].replace('Z', '')
-            
-            # تحويل من string إلى datetime
+            # تحليل الوقت المستلم من المتصفح (بصيغة datetime-local)
+            # الوقت المستلم هو بالتوقيت المحلي للمتصفح
             try:
-                # محاولة التحليل بدون معلومات timezone أولاً
-                check_in_naive = datetime.fromisoformat(check_in_str)
-                # إضافة timezone سوريا
+                check_in_naive = datetime.fromisoformat(data['check_in_time'])
+                # نعتبر أن الوقت المستلم هو بتوقيت سوريا
                 record.check_in_time = damascus_tz.localize(check_in_naive)
-            except:
-                # إذا فشل، محاولة التحليل مع timezone
-                check_in_dt = datetime.fromisoformat(check_in_str)
-                record.check_in_time = check_in_dt.astimezone(damascus_tz)
-        elif 'check_in_time' in data and not data['check_in_time']:
-            record.check_in_time = None
+            except Exception as e:
+                print(f"خطأ في تحليل check_in_time: {e}")
+                return jsonify({'error': 'صيغة وقت الدخول غير صحيحة'}), 400
         
         if 'check_out_time' in data and data['check_out_time']:
-            # إزالة Z إذا كانت موجودة وتحويل إلى datetime
-            check_out_str = data['check_out_time'].replace('Z', '')
-            
-            # تحويل من string إلى datetime
+            # تحليل الوقت المستلم من المتصفح
             try:
-                # محاولة التحليل بدون معلومات timezone أولاً
-                check_out_naive = datetime.fromisoformat(check_out_str)
-                # إضافة timezone سوريا
+                check_out_naive = datetime.fromisoformat(data['check_out_time'])
+                # نعتبر أن الوقت المستلم هو بتوقيت سوريا
                 record.check_out_time = damascus_tz.localize(check_out_naive)
-            except:
-                # إذا فشل، محاولة التحليل مع timezone
-                check_out_dt = datetime.fromisoformat(check_out_str)
-                record.check_out_time = check_out_dt.astimezone(damascus_tz)
+            except Exception as e:
+                print(f"خطأ في تحليل check_out_time: {e}")
+                return jsonify({'error': 'صيغة وقت الخروج غير صحيحة'}), 400
         elif 'check_out_time' in data and not data['check_out_time']:
             record.check_out_time = None
         
@@ -8657,12 +8646,12 @@ def update_attendance_control_record(record_id):
             if record.check_out_time <= record.check_in_time:
                 return jsonify({'error': 'وقت الخروج يجب أن يكون بعد وقت الدخول'}), 400
             
-            # حساب ساعات العمل الفعلية (office_work_hours) - الوقت الفعلي بين الدخول والخروج
+            # حساب ساعات العمل الفعلية (office_work_hours)
             work_seconds = (record.check_out_time - record.check_in_time).total_seconds()
             office_work_hours = round(work_seconds / 3600, 2)
             record.office_work_hours = office_work_hours
             
-            # حساب ساعات العمل النظامية (work_hours) - مع فترة السماح 15 دقيقة
+            # حساب ساعات العمل النظامية (work_hours)
             employee = record.employee
             work_date = record.work_date if record.work_date else record.check_in_time.date()
             
@@ -8675,18 +8664,13 @@ def update_attendance_control_record(record_id):
             # فترة السماح 15 دقيقة بعد بداية العمل
             grace_period_end = work_start_dt + timedelta(minutes=15)
             
-            # تحديد وقت البدء لاحتساب work_hours:
-            # - إذا دخل خلال فترة السماح (من 9:00 إلى 9:15) → يعتبر كأنه دخل 9:00
-            # - إذا دخل بعد فترة السماح (بعد 9:15) → يبدأ الحساب من وقت الدخول الفعلي
             if record.check_in_time <= grace_period_end:
                 effective_start_time = work_start_dt
             else:
                 effective_start_time = record.check_in_time
             
-            # وقت النهاية الفعلي هو الأقل بين وقت الخروج ووقت انتهاء الدوام
             effective_end_time = min(record.check_out_time, work_end_dt)
             
-            # احتساب ساعات العمل النظامية (work_hours)
             if effective_start_time < effective_end_time:
                 work_seconds_within = (effective_end_time - effective_start_time).total_seconds()
                 work_hours_within = round(work_seconds_within / 3600, 2)
@@ -8698,11 +8682,6 @@ def update_attendance_control_record(record_id):
             print(f"🔍 تفاصيل الحساب:")
             print(f"   - وقت الدخول: {record.check_in_time}")
             print(f"   - وقت الخروج: {record.check_out_time}")
-            print(f"   - بداية الدوام: {work_start_dt}")
-            print(f"   - نهاية الدوام: {work_end_dt}")
-            print(f"   - نهاية فترة السماح: {grace_period_end}")
-            print(f"   - وقت البدء الفعلي (لـ work_hours): {effective_start_time}")
-            print(f"   - وقت النهاية الفعلي: {effective_end_time}")
             print(f"   - ساعات العمل الفعلية (office): {office_work_hours}")
             print(f"   - ساعات العمل النظامية (work): {work_hours_within}")
         
@@ -8719,8 +8698,7 @@ def update_attendance_control_record(record_id):
                 'check_in_time': check_in_syria.isoformat() if check_in_syria else None,
                 'check_out_time': check_out_syria.isoformat() if check_out_syria else None,
                 'office_work_hours': record.office_work_hours,
-                'work_hours': record.work_hours,
-                'notes': record.notes
+                'work_hours': record.work_hours
             }
         })
         
@@ -8896,6 +8874,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
