@@ -8628,6 +8628,8 @@ def update_attendance_control_record(record_id):
                 # إذا فشل، محاولة التحليل مع timezone
                 check_in_dt = datetime.fromisoformat(check_in_str)
                 record.check_in_time = check_in_dt.astimezone(damascus_tz)
+        elif 'check_in_time' in data and not data['check_in_time']:
+            record.check_in_time = None
         
         if 'check_out_time' in data and data['check_out_time']:
             # إزالة Z إذا كانت موجودة وتحويل إلى datetime
@@ -8717,7 +8719,8 @@ def update_attendance_control_record(record_id):
                 'check_in_time': check_in_syria.isoformat() if check_in_syria else None,
                 'check_out_time': check_out_syria.isoformat() if check_out_syria else None,
                 'office_work_hours': record.office_work_hours,
-                'work_hours': record.work_hours
+                'work_hours': record.work_hours,
+                'notes': record.notes
             }
         })
         
@@ -8893,6 +8896,7 @@ def logout():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
 
 
 
